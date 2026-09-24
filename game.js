@@ -4,7 +4,7 @@ import { CARS, CAR_BY_ID, ABILITIES, SKILL_TREE, computeStats } from './data.js'
 import { TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
 import { buildCarMesh } from './carmodel.js';
 import { buildWorld } from './world.js';
-import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities, robotKnock } from './abilities.js';
+import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities, robotKnock, netAway } from './abilities.js';
 import { createRecorder, createGhostPlayer } from './ghost.js';
 import { netSample, ageOf, predict, newOffset, applyOffset, retarget, decay } from './netpredict.js';
 
@@ -156,6 +156,8 @@ async function setup(ctx, root, opts, mode) {
   resize(ctx);
   // link every program now (parallel where the driver can) instead of one by one as the countdown camera swings round
   try { renderer.compile(scene, ctx.views[0].camera); } catch (e) { console.warn(e); }
+  // an ability's own course (tokyodive) does the same for its lighting, and uploads its textures: now, not mid-race
+  for (const f of race.warmups || []) try { f(ctx, ctx.views[0].camera); } catch (e) { console.warn(e); }
   loading.remove();
   ctx.last = performance.now();
   ctx.raf = requestAnimationFrame(t => frame(ctx, t));
@@ -257,6 +259,9 @@ function makeCar(index, e, mesh) {
       t: 0, prevT: null, crossings: 0, halfway: true, lapStart: 0, lastLap: null, pitch: 0, acc: 0, rollS: 0,
       spinVis: 0, spinTot: 0, lastSpin: 0, spinSteer: 0, spinSteerT: 0,
       lane: 0, laneTarget: 0, laneT: 0, stuck: 0, abilDelay: null, wrong: 0, net: null, off: newOffset(), left: false,
+      // an ability's own space (tokyodive): away = out of the race world (progress frozen, no AI); track = the course
+      // a driver is on meanwhile; jump = lap fraction it came back ahead by (updateProgress counts what it skipped)
+      away: false, track: null, jump: 0,
     },
   };
 }
@@ -317,7 +322,7 @@ function placeOnGrid(ctx, car, slot) {
 }
 
 function respawn(ctx, car) {
-  const tr = ctx.track, n = tr.nearest(car.pos, car.trackIndex), s = tr.samples[n.index];
+  const tr = car._.track || ctx.track, n = tr.nearest(car.pos, car.trackIndex), s = tr.samples[n.index];
   car.pos.copy(s.pos).addScaledVector(s.right, clamp(n.lateral, -(tr.width / 2 - 2), tr.width / 2 - 2));
   car.heading = Math.atan2(s.tan.x, s.tan.z);
   car.vel.set(0, 0, 0);
@@ -599,7 +604,7 @@ function drawMap(ctx, v) {
   };
   const gm = ctx.ghost?.mesh;
   if (gm) dot(gm.position.x, gm.position.z, 4.5, 'rgba(180,230,255,0.45)', 'rgba(255,255,255,0.6)');
-  for (const car of ctx.race.cars) if (car !== v.car && !car._.left) dot(car.pos.x, car.pos.z, 4.5, car.look.body, '#111');
+  for (const car of ctx.race.cars) if (car !== v.car && !car._.left && !car._.away && car.mesh.visible) dot(car.pos.x, car.pos.z, 4.5, car.look.body, '#111');
   dot(v.car.pos.x, v.car.pos.z, 6.5, v.car.look.body, '#fff');
 }
 
@@ -671,7 +676,7 @@ function updateLabels(ctx, v) {
   const lab = v.hud.labels, rect = { width: ctx.W, height: ctx.H / ctx.views.length };
   for (const car of ctx.race.cars) {
     let e = v.hud.labelEls.get(car);
-    const show = car !== v.car && !car._.left && car.pos.distanceTo(v.car.pos) < 90;
+    const show = car !== v.car && !car._.left && !car._.away && car.mesh.visible && car.pos.distanceTo(v.car.pos) < 90;
     if (!show) { if (e) setStyle(e, 'display', 'none'); continue; }
     if (!e) { e = el(lab, 'div', 'rg-label', esc(car.name)); e.style.borderColor = car.look.body; v.hud.labelEls.set(car, e); }
     _proj.set(car.pos.x, car.pos.y + 2.3, car.pos.z).project(v.camera);
@@ -795,7 +800,7 @@ function aiInput(ctx, car, dt) {
 // Physics
 // ======================================================================================
 function stepCar(ctx, car, dt) {
-  const race = ctx.race, tr = race.track, c = car._, st = car.stats, m = car.mods, inp = car.input, W2 = tr.width / 2;
+  const race = ctx.race, tr = car._.track || race.track, c = car._, st = car.stats, m = car.mods, inp = car.input, W2 = tr.width / 2;
   if (car.heading !== c.h || car.speed !== c.s) {   // changed from outside (warp etc.) -> rebuild velocity
     car.vel.set(Math.sin(car.heading) * car.speed, 0, Math.cos(car.heading) * car.speed);
   }
@@ -967,8 +972,18 @@ function impact(ctx, x, y, z, strength, cars) {
 // ======================================================================================
 function updateProgress(ctx, car) {
   const c = car._, t = c.t;
+  if (c.away) return;   // off in an ability's own space: frozen until it comes back
   if (c.prevT == null) c.prevT = t;
   let crossed = false;
+  if (c.jump) {   // came back far ahead: count the half-way marks and the finish line it skipped over
+    const end = c.prevT + c.jump;
+    for (let m = Math.floor(c.prevT * 2 + 1) / 2; m <= end; m += 0.5) {
+      if (m % 1) c.halfway = true;
+      else if (c.halfway) { c.crossings++; c.halfway = false; crossed = true; }
+    }
+    c.jump = 0;
+    c.prevT = wrap01(end);   // where it landed: the check below still sees a line crossed by this frame's own move
+  }
   if (c.prevT > 0.75 && t < 0.25) {
     if (c.halfway) { c.crossings++; c.halfway = false; crossed = true; }
   } else if (c.prevT < 0.25 && t > 0.75) { c.crossings--; c.halfway = true; }
@@ -1088,11 +1103,15 @@ function hookNet(ctx) {
     const car = byPid.get(String(msg.pid));
     if (!car || car.control !== 'net' || car._.left) return;
     const c = car._, now = performance.now() / 1000, prev = c.net;
-    const next = netSample(msg, prev, now);
-    // pose on screen right now (the grid slot before the first state), kept continuous across the new prediction
-    const shown = prev ? applyOffset(predict(prev, ageOf(prev, now)), c.off) : [car.pos.x, car.pos.z, car.heading];
-    retarget(c.off, shown, predict(next, ageOf(next, now)));
-    c.net = next;
+    if (msg.aw) c.net = null;   // away in its ability's own space: hidden and parked; back, it starts a fresh prediction
+    else {
+      const next = netSample(msg, prev, now);
+      // pose on screen right now (the grid slot before the first state), kept continuous across the new prediction
+      const shown = prev ? applyOffset(predict(prev, ageOf(prev, now)), c.off) : [car.pos.x, car.pos.z, car.heading];
+      retarget(c.off, shown, predict(next, ageOf(next, now)));
+      c.net = next;
+    }
+    netAway(race, car, !!msg.aw, msg);
     if (Number.isFinite(msg.lap)) car.lap = msg.lap;
     if (Number.isFinite(msg.p)) car.progress = msg.p;
     if (Number.isFinite(msg.ft) && !car.finished) { car.finished = true; car.finishTime = msg.ft; }
@@ -1196,7 +1215,7 @@ function update(ctx, dt) {
     if (v && !car.finished) {
       const reset = readKeys(ctx, v.keys, inp);
       if (reset && race.state === 'running' && Math.abs(car.speed) < 30) respawn(ctx, car);
-    } else aiInput(ctx, car, dt);
+    } else if (!car._.away) aiInput(ctx, car, dt);
     if (race.state !== 'running') inp.ability = false;
   }
   ctx.pressed.clear();
@@ -1219,7 +1238,7 @@ function update(ctx, dt) {
     if ((car.stats.slipstream || car.stats.passive === 'draft') && car.speed > 15) {
       const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
       for (const o of cars) {
-        if (o === car || o._.left) continue;
+        if (o === car || o._.left || o._.away) continue;   // away: in an ability's own space, not on this road
         const dx = o.pos.x - car.pos.x, dz = o.pos.z - car.pos.z, along = dx * fx + dz * fz, lat = -dx * fz + dz * fx;
         if (along > 2 && along < 25 && Math.abs(lat) < 2.4 && Math.cos(o.heading - car.heading) > 0.8) { slip = car.stats.passive === 'draft' ? 0.16 : 0.08; break; }
       }
@@ -1235,7 +1254,8 @@ function update(ctx, dt) {
   if (race.state !== 'countdown') {
     const steps = Math.ceil(dt / (1 / 120)), h = dt / steps;
     for (let k = 0; k < steps; k++) {
-      for (const car of cars) if (car.control !== 'net' && !car._.left) stepCar(ctx, car, h);
+      // an ability's own course may run its own clock (tokyodive: time flows faster in there)
+      for (const car of cars) if (car.control !== 'net' && !car._.left && (!car._.away || car._.track)) stepCar(ctx, car, h * (car._.track?.timeScale || 1));
       collide(ctx);
       for (const car of cars) if (car.control !== 'net') settle(car);
     }
@@ -1261,7 +1281,7 @@ function update(ctx, dt) {
   ctx.order = standings(cars);
   for (const car of cars) {
     if (!isLocal(car)) continue;
-    const tn = race.track.samples[car.trackIndex].tan;
+    const tn = (car._.track || race.track).samples[car.trackIndex].tan;
     const wrong = race.state === 'running' && car.speed > 4 && (Math.sin(car.heading) * tn.x + Math.cos(car.heading) * tn.z) < -0.3;
     car._.wrong = wrong ? car._.wrong + dt : 0;
   }
@@ -1284,7 +1304,7 @@ function update(ctx, dt) {
       // ft: the public broker has been seen to ack and then drop a single QoS1 'finish', so the finish time also rides
       // on every state message, and 'finish' itself is repeated until results arrive
       const ft = p1.finished ? { ft: r3(p1.finishTime) } : null;
-      try { race.net.send({ t: 'state', pid: race.localPid, x: r2(p1.pos.x), y: r2(p1.pos.y), z: r2(p1.pos.z), h: r3(p1.heading), s: r2(p1.speed), lap: p1.lap, p: r3(p1.progress), rt: r3(race.time), ...ft }); }
+      try { race.net.send({ t: 'state', pid: race.localPid, x: r2(p1.pos.x), y: r2(p1.pos.y), z: r2(p1.pos.z), h: r3(p1.heading), s: r2(p1.speed), lap: p1.lap, p: r3(p1.progress), rt: r3(race.time), ...ft, ...(p1._.away && { aw: 1 }) }); }
       catch (e) { if (ctx.errors++ < 3) console.warn(e); }
       if (ft && !ctx.finalized && ctx.clock - (ctx.finishSentAt ?? 0) > 2) {
         ctx.finishSentAt = ctx.clock;
@@ -1366,6 +1386,7 @@ function updateViews(ctx, dt) {
     if (spd > 4 && car.speed > 0) targetH = car.heading + wrapAngle(Math.atan2(car.vel.x, car.vel.z) - car.heading) * 0.55;
     let dist = 7.4 + Math.min(spd, 80) * 0.028, height = 2.7 + Math.min(spd, 80) * 0.006;
     if (race.state === 'countdown') { const k = smooth(0, 3.9, ctx.count); targetH += k * 2.6; dist += k * 5; height += k * 2.5; }
+    if (v.camPos.distanceToSquared(car.pos) > 1600) v.camH = targetH;   // teleported: the cut below also faces the way it goes
     v.camH += wrapAngle(targetH - v.camH) * damp(race.state === 'countdown' ? 4 : 6, dt);
     const fx = Math.sin(v.camH), fz = Math.cos(v.camH);
     v.tmp.set(car.pos.x - fx * dist, car.pos.y + height, car.pos.z - fz * dist);
@@ -1414,7 +1435,9 @@ function render(ctx) {
     ctx.sun.target.updateMatrixWorld();
     const u = vh * r.getPixelRatio() * cam.projectionMatrix.elements[5] * 0.5;
     for (const p of ctx.fx) p.points.material.uniforms.uScale.value = u;
+    const undo = v.car._.track?.view?.(ctx, v);   // on an ability's own course: its sky, fog and lights for this view
     r.render(ctx.scene, cam);
+    undo?.();
   });
 }
 
