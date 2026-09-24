@@ -47,7 +47,7 @@ export const CARS = [
   { id: 'ur_warp',  name: 'ディメンション・シャーク', rarity: 'UR', body: 'shark', color: '#4cc9f0', ability: 'warp', passive: null, base: { top: 70, accel: 21, grip: 0.90, steer: 2.3, mass: 1.1 } },
   { id: 'ur_time',  name: 'クロノ・ドラゴン',  rarity: 'UR', body: 'dragon',  color: '#7b2cbf', ability: 'timeslow', passive: null, base: { top: 69, accel: 21, grip: 0.90, steer: 2.3, mass: 1.2 } },
   { id: 'ur_phase', name: 'スシ・ファントム',  rarity: 'UR', body: 'sushi',   color: '#ff8fa3', ability: 'phase', passive: null,    base: { top: 71, accel: 20, grip: 0.89, steer: 2.4, mass: 1.0 } },
-  { id: 'ur_thunder', name: 'サンダー・ドラゴンX', rarity: 'UR', body: 'dragon', color: '#ffd23f', ability: 'thunderbolt', passive: null, base: { top: 74, accel: 22, grip: 0.92, steer: 2.4, mass: 1.3 } },
+  { id: 'ur_thunder', name: 'サンダー・ドラゴンX', rarity: 'UR', body: 'dragon', color: '#ffd23f', ability: 'thunderbolt', passive: null, base: { top: 74, accel: 22, grip: 0.90, steer: 2.4, mass: 1.3 } },
 ];
 for (const c of CARS) c.modelRot ??= Math.PI / 2;   // models/*.glb are authored nose toward -X
 export const CAR_BY_ID = Object.fromEntries(CARS.map(c => [c.id, c]));

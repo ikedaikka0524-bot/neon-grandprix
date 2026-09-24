@@ -863,7 +863,9 @@ export function tryActivate(race, car) {
 
 export function applyRemoteAbility(race, msg) {
   const def = ABILITIES[msg?.id];
-  if (!def || !race.scene) return;
+  // a straggler still counting down (forced start) has no clock running: a spin / slow / slick / fx applied now
+  // would freeze until its own GO and land there. Same rule as tryActivate: nothing acts before GO.
+  if (!def || !race.scene || race.state !== 'running') return;
   const car = race.cars.find(c => c.pid != null && c.pid === msg.pid) || null;
   if (car && !car.ability) initAbility(race, car);
   const num = (v, d) => (Number.isFinite(v) ? v : d);
