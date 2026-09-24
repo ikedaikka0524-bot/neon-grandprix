@@ -65,19 +65,24 @@ export async function buildCarMesh(carId, look, opts = {}) {
 }
 
 // ---------- GLB ----------
-function fromGLB(src, def, look) {
+// clone with its own materials, uniformly scaled by fit(size), centred on x/z with the bottom at y = 0
+function fitClone(src, fit) {
   const model = src.clone(true);
   model.traverse(o => { if (o.isMesh) o.material = Array.isArray(o.material) ? o.material.map(x => x.clone()) : o.material.clone(); });
   const inner = new THREE.Group();
   inner.add(model);
   inner.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(inner);
-  const size = box.getSize(new THREE.Vector3());
-  inner.scale.setScalar(Math.min(CAR_LEN / Math.max(size.x, size.z, 1e-6), CAR_MAX_W / Math.max(Math.min(size.x, size.z), 1e-6)));
+  inner.scale.setScalar(fit(box.getSize(new THREE.Vector3())));
   inner.updateMatrixWorld(true);
   box.setFromObject(inner);
   const c = box.getCenter(new THREE.Vector3());
   inner.position.set(-c.x, -box.min.y, -c.z);
+  return { model, inner };
+}
+
+function fromGLB(src, def, look) {
+  const { model, inner } = fitClone(src, s => Math.min(CAR_LEN / Math.max(s.x, s.z, 1e-6), CAR_MAX_W / Math.max(Math.min(s.x, s.z), 1e-6)));
   const pivot = new THREE.Group();
   pivot.rotation.y = def.modelRot || 0;
   pivot.add(inner);
@@ -177,13 +182,13 @@ function bakePaint(src, stockHex, hex, root, mat) {
     const data = g.getImageData(0, 0, c.width, c.height), d = data.data, samples = d.length / 16;
     // 1) find the paint: white/grey cars by low saturation, others by the dominant hue near the stock hue
     hsv(...rgb255(stockHex));
-    const neutral = S < 0.25, stockH = H;
+    const neutral = S < 0.25, stockH = H, sk = Math.min(1, S / 0.4);   // muted paint (the robot's tan): gates scale down
     let hue = 0;
     if (!neutral) {
       const bins = new Float32Array(36);
       for (let i = 0; i < d.length; i += 16) {
         hsv(d[i], d[i + 1], d[i + 2]);
-        if (S > 0.35 && V > 0.15 && hueDist(H, stockH) < 45) bins[Math.min(35, (H / 10) | 0)]++;
+        if (S > 0.35 * sk && V > 0.15 && hueDist(H, stockH) < 45) bins[Math.min(35, (H / 10) | 0)]++;
       }
       let bi = 0;
       for (let k = 1; k < 36; k++) if (bins[k] > bins[bi]) bi = k;
@@ -193,7 +198,7 @@ function bakePaint(src, stockHex, hex, root, mat) {
     let n = 0, vSum = 0;
     for (let i = 0; i < d.length; i += 16) {
       hsv(d[i], d[i + 1], d[i + 2]);
-      if (neutral ? S < 0.15 && V > 0.3 : S > 0.3 && V > 0.12 && hueDist(H, hue) < 20) { n++; vSum += V; }
+      if (neutral ? S < 0.15 && V > 0.3 : S > 0.3 * sk && V > 0.12 && hueDist(H, hue) < 20) { n++; vSum += V; }
     }
     if (n < samples * 0.02) return null;
     const vRef = vSum / n;
@@ -206,7 +211,7 @@ function bakePaint(src, stockHex, hex, root, mat) {
       hsv(r, gg, b);
       const w = neutral
         ? (1 - sstep(0.12, 0.22, S)) * sstep(vRef * 0.45, vRef * 0.6, V) * (wheels ? 1 - wheels[i >> 2] : 1)
-        : (1 - sstep(22, 38, hueDist(H, hue))) * sstep(0.18, 0.32, S) * sstep(0.05, 0.1, V);
+        : (1 - sstep(22, 38, hueDist(H, hue))) * sstep(0.18 * sk, 0.32 * sk, S) * sstep(0.05, 0.1, V);
       if (w <= 0) continue;
       const k = V / vRef;
       d[i] = r + (Math.min(255, tr * k) - r) * w;
@@ -863,6 +868,17 @@ const ACCENTS = {
     add(s, new THREE.TorusGeometry(0.85, 0.03, 8, 40).rotateX(Math.PI / 2), m.glow, 0, 1.95, -0.6);
     pair(s, box(0.02, 0.06, 2.8), m.glow, 1.06, 0.62, 0);
   },
+  ur_graphite(s, m) {   // aero GT: blue glow lines along the sills and the splitter, dive planes
+    m.glow.color.set(0x8fdcff); m.glow.emissive.set(0x1a8cff);
+    pair(s, box(0.02, 0.035, 3.3), m.glow, 1.0, 0.3, -0.05);
+    add(s, box(1.86, 0.025, 0.04), m.glow, 0, 0.215, 2.31);
+    pair(s, box(0.3, 0.02, 0.18), m.black, 0.9, 0.4, 2.05).forEach(o => { o.rotation.x = -0.15; });
+  },
+  ur_changer(s, m) {   // retro kei: chrome bumpers, hood badge, pinstripe
+    for (const z of [1.79, -1.78]) add(s, box(1.5, 0.1, 0.08), m.chrome, 0, 0.36, z);
+    add(s, new THREE.CylinderGeometry(0.1, 0.1, 0.03, 20), m.chrome, 0, 0.86, 1.47).rotation.x = 0.24;
+    pair(s, box(0.02, 0.05, 2.9), new THREE.MeshStandardMaterial({ color: 0xc8553d, roughness: 0.4 }), 0.785, 0.64, 0);
+  },
 };
 
 function procedural(def, look) {
@@ -918,4 +934,137 @@ function flipWinding(geo) {
       }
     }
   }
+}
+
+// ---------- robot (ur_changer's robotdash form) ----------
+const ROBOT_H = 3.8;
+const ROBOT_ROT = 0;   // yaw fix for models/ur_changer_robot.glb (Meshy characters face +Z; Math.PI / 2 if authored like the cars)
+const ROBOT_PAINT = '#c9b58e';   // that GLB's tan shell (mean texel): its stock paint, not the car's near-white cream
+
+// models/ur_changer_robot.glb fitted like the cars (inside the 4.2 m box, but standing ~3.8 m tall, bottom at y = 0,
+// facing +Z), else a procedural humanoid built from the classic car's parts. Tinted with look.body.
+// userData.anim(time, speed) = run cycle (limb swing when procedural, bob + lean for the GLB).
+export async function buildRobotMesh(look) {
+  const def = CAR_BY_ID.ur_changer || CARS[0];
+  look = { body: def.color, wheel: '#222222', ...(look || {}) };
+  const src = await loadGLB('ur_changer_robot');
+  let g = null;
+  if (src) { try { g = robotFromGLB(src, def, look); } catch { g = null; } }
+  if (!g) g = proceduralRobot(def, look);
+  g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+  g.name = 'robot:' + def.id;
+  return g;
+}
+
+function robotFromGLB(src, def, look) {
+  const { model, inner } = fitClone(src, s => Math.min(CAR_LEN / Math.max(s.x, s.z, 1e-6), ROBOT_H / Math.max(s.y, 1e-6)));
+  const yaw = new THREE.Group(), pivot = new THREE.Group();   // pivot: bob + lean from the feet
+  yaw.rotation.y = ROBOT_ROT;
+  yaw.add(inner);
+  pivot.add(yaw);
+  const g = new THREE.Group();
+  g.add(pivot);
+  const best = largestMaterial(model);
+  if (best?.map?.image) {   // stock car colour: stock robot texture
+    if (new THREE.Color(look.body).getHex() !== new THREE.Color(def.color).getHex()) repaint(best, { id: def.id + '_robot', color: ROBOT_PAINT }, look.body, model);   // own paint cache key
+  } else if (best?.color) best.color.set(look.body);
+  g.userData.anim = (t, speed) => {
+    const f = Math.min(Math.abs(speed), 60) / 60, ph = t * (5 + f * 7);
+    pivot.position.y = Math.abs(Math.sin(ph)) * (0.05 + 0.12 * f);
+    pivot.rotation.x = 0.04 + 0.2 * f;
+    pivot.rotation.z = Math.sin(ph) * 0.04;
+  };
+  return g;
+}
+
+// ~3.8 m: bumper feet, shins with the car's wheels, windshield chest, fender shoulders, round headlight eyes, cabin backpack
+function proceduralRobot(def, look) {
+  const m = makeMats(def, look), g = new THREE.Group();
+  const seg = (parent, x, y, z, build) => {   // rigid part merged by material, origin at its joint
+    const s = new THREE.Group();
+    build(s);
+    const p = mergeStatic(s);
+    p.position.set(x, y, z);
+    parent.add(p);
+    return p;
+  };
+  const rbox = (w, h, d, r) => new RoundedBoxGeometry(w, h, d, 3, r);
+  const wheelR = 0.3, legs = [], arms = [], root = new THREE.Group();   // root: run bob
+  g.add(root);
+  const torso = seg(root, 0, 1.8, 0, s => {
+    add(s, box(1.0, 0.3, 0.58), m.trim, 0, 0.08, 0);                          // pelvis
+    add(s, box(0.72, 0.34, 0.46), m.black, 0, 0.36, 0);                        // waist
+    add(s, rbox(1.62, 0.95, 0.92, 0.14), m.body, 0, 0.95, 0);                  // chest = the kei's nose
+    add(s, box(1.2, 0.34, 0.05), m.glass, 0, 1.12, 0.45);                     // windshield
+    add(s, box(1.64, 0.1, 0.1), m.chrome, 0, 0.55, 0.44);                      // bumper belt
+    add(s, box(0.62, 0.12, 0.05), m.black, 0, 0.7, 0.46);                      // grille
+    for (let i = -2; i <= 2; i++) add(s, box(0.03, 0.12, 0.03), m.chrome, i * 0.12, 0.7, 0.48);
+    add(s, new THREE.CylinderGeometry(0.07, 0.07, 0.03, 18).rotateX(Math.PI / 2), m.chrome, 0, 0.86, 0.47);   // badge
+    add(s, rbox(1.3, 0.8, 0.5, 0.1), m.body, 0, 1.0, -0.62);                   // backpack: the cabin
+    pair(s, box(0.02, 0.4, 0.34), m.glass, 0.66, 1.08, -0.62);                  // its side windows
+    add(s, box(1.1, 0.05, 0.4), m.trim, 0, 1.43, -0.62);                       // roof rack
+    pair(s, box(0.14, 0.26, 0.04), m.tail, 0.48, 0.95, -0.88);
+    for (const k of [1, -1]) {                                                 // fender shoulders
+      add(s, new THREE.CylinderGeometry(0.44, 0.44, 0.8, 18, 1, false, -Math.PI / 2, Math.PI).rotateX(-Math.PI / 2), m.body, k * 0.98, 1.3, 0);
+      add(s, box(0.8, 0.06, 0.82), m.trim, k * 0.98, 1.3, 0);
+    }
+    roundLight(s, m.head, 0.98, 1.47, 0.41, 0.07);                             // turn signals (pair: both sides)
+  });
+  const head = seg(torso, 0, 1.42, 0, s => {
+    add(s, box(0.3, 0.16, 0.3), m.trim, 0, 0.08, 0);                           // neck
+    add(s, rbox(0.74, 0.54, 0.62, 0.1), m.body, 0, 0.4, 0);
+    add(s, box(0.6, 0.12, 0.04), m.glass, 0, 0.58, 0.3);                      // visor
+    roundLight(s, m.chrome, 0.17, 0.4, 0.3, 0.13);                             // headlight eyes
+    roundLight(s, m.head, 0.17, 0.4, 0.33, 0.1);
+    add(s, box(0.44, 0.07, 0.05), m.chrome, 0, 0.21, 0.31);                    // bumper mouth
+    add(s, box(0.12, 0.1, 0.5), m.body, 0, 0.7, -0.02);                        // crest
+    add(s, new THREE.CylinderGeometry(0.018, 0.018, 0.28, 6), m.chrome, 0.24, 0.8, -0.15);   // antenna
+    add(s, new THREE.SphereGeometry(0.05, 10, 8), m.tail, 0.24, 0.95, -0.15);
+  });
+  for (const k of [1, -1]) {
+    const sh = seg(torso, k * 0.98, 1.24, 0, s => add(s, box(0.34, 0.72, 0.36), m.trim, 0, -0.34, 0));
+    const el = seg(sh, 0, -0.72, 0, s => {
+      add(s, box(0.42, 0.66, 0.44), m.body, 0, -0.32, 0);
+      add(s, box(0.36, 0.3, 0.38), m.black, 0, -0.8, 0);                       // fist
+      add(s, box(0.02, 0.4, 0.2), m.chrome, k * 0.22, -0.3, 0);
+    });
+    arms.push({ sh, el, k });
+    const hip = seg(root, k * 0.4, 1.8, 0, s => {
+      add(s, box(0.42, 0.8, 0.46), m.trim, 0, -0.4, 0);
+      add(s, new THREE.CylinderGeometry(0.12, 0.12, 0.05, 16).rotateX(Math.PI / 2), m.chrome, 0, -0.8, 0.24);   // knee cap
+    });
+    const knee = seg(hip, 0, -0.8, 0, s => {
+      add(s, box(0.5, 0.8, 0.54), m.body, 0, -0.4, 0);
+      add(s, box(0.6, 0.2, 0.9), m.black, 0, -0.9, 0.12);                     // foot
+      add(s, box(0.62, 0.08, 0.07), m.chrome, 0, -0.86, 0.58);                 // bumper toe
+    });
+    const w = new THREE.Group(), G = wheelGeos(wheelR, 0.2);                   // the car's wheel on the outer calf
+    w.scale.x = k;
+    w.add(new THREE.Mesh(G.tire, m.tire), new THREE.Mesh(G.barrel, m.trim), new THREE.Mesh(G.spokes, m.rim), new THREE.Mesh(G.lip, m.rim), new THREE.Mesh(G.hub, m.chrome));
+    const wheel = mergeStatic(w);
+    wheel.position.set(k * 0.36, -0.42, -0.05);
+    knee.add(wheel);
+    legs.push({ hip, knee, wheel, k });
+  }
+  let last = null;
+  g.userData.anim = (t, speed) => {
+    const f = Math.min(Math.abs(speed), 60) / 60, ph = t * (4 + f * 8), sn = Math.sin(ph), amp = 0.3 + 0.55 * f, dt = last == null ? 0 : t - last;
+    last = t;
+    for (const L of legs) {   // + rotation.x swings a limb backward
+      const s = sn * L.k;
+      L.hip.rotation.x = s * amp;
+      L.knee.rotation.x = Math.max(0, s) * amp * 1.5;
+      L.wheel.rotation.x += speed * dt / wheelR;
+    }
+    for (const A of arms) {
+      A.sh.rotation.x = -sn * A.k * amp * 0.9;
+      A.el.rotation.x = -0.5 - 0.5 * f;
+    }
+    torso.rotation.x = 0.06 + 0.26 * f;
+    root.position.y = Math.abs(sn) * (0.04 + 0.1 * f);
+    head.rotation.x = -torso.rotation.x * 0.6;   // keep looking ahead
+  };
+  g.userData.anim(0, 0);
+  root.scale.setScalar(ROBOT_H / new THREE.Box3().setFromObject(g).getSize(new THREE.Vector3()).y);   // same height as the GLB
+  return g;
 }

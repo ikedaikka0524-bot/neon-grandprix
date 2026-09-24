@@ -426,10 +426,10 @@ export async function buildWorld(ctx, def) {
 }
 
 // ======================================================================================
-// Barriers (visual; the physical wall is in game.js at width/2 + 9.4)
+// Barriers (visual; the physical wall is in game.js at width/2 + wallGap, default 9.4)
 // ======================================================================================
 function buildBarriers({ THREE, world, track, env, night, rnd, col }) {
-  const S = track.samples, N = track.N, W2 = track.width / 2, L = W2 + 10;
+  const S = track.samples, N = track.N, W2 = track.width / 2, L = W2 + (track.def?.wallGap ?? 9.4) + 0.6;
   // vertical strip at lateral `lat`, y0..y1 above the centerline; u runs backwards on the right so text reads from the road
   const wall = (lat, y0, y1, uLen = 32) => {
     const pos = [], uv = [], sg = Math.sign(lat);

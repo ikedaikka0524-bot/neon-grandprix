@@ -1,8 +1,8 @@
 // node tools/check-tracks.mjs  — sanity-checks every course in tracks.js (same curve math as THREE.CatmullRomCurve3 'centripetal').
 import { TRACKS } from '../tracks.js';
 
-const WALL_PAD = 10.5;              // barriers/ad walls sit at width/2 + ~10 m
-const MIN_RADIUS = 13, MAX_GRADE = 0.13, MIN_LEN = 900, MAX_LEN = 5500;   // nring: real-scale hairpin ~14 m, 5.1 km
+const wallPad = tr => (tr.wallGap ?? 9.4) + 1.1;   // barriers sit at width/2 + wallGap (street circuits set it tight)
+const MIN_RADIUS = 12, MAX_GRADE = 0.13, MIN_LEN = 900, MAX_LEN = 7500;   // real circuits: hairpins ~12-14 m, Spa ~7 km
 
 function poly(x0, x1, x2, x3, d0, d1, d2) {
   let t1 = (x1 - x0) / d0 - (x2 - x0) / (d0 + d1) + (x2 - x1) / d1;
@@ -47,10 +47,11 @@ for (const tr of TRACKS) {
     const a = out[i], b = out[(i + 1) % N], g = Math.abs(b[1] - a[1]) / Math.hypot(b[0] - a[0], b[2] - a[2]);
     if (g > maxG) { maxG = g; maxGAt = i; }
   }
-  const need = tr.width + 2 * WALL_PAD, gap = Math.ceil(1.7 * need / sp);
+  const need = tr.width + 2 * wallPad(tr), gap = Math.ceil(1.7 * need / sp);
   let minSep = Infinity, sepAt = null;
   for (let i = 0; i < N; i += 2) for (let j = i + gap; j < N; j += 2) {
     if (N - (j - i) < gap) continue;
+    if (Math.abs(out[i][1] - out[j][1]) > 5) continue;   // bridge / crossover (e.g. Suzuka)
     const d = Math.hypot(out[i][0] - out[j][0], out[i][2] - out[j][2]);
     if (d < minSep) { minSep = d; sepAt = [i, j]; }
   }

@@ -1,6 +1,8 @@
 // Active abilities: gauges, effects written into car.mods, hazards (oil / timeslow) and all their visuals.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ABILITIES } from './data.js';
+import { buildRobotMesh } from './carmodel.js';
 
 const OIL_RADIUS = 3, OIL_BEHIND = 4.2;
 const DRIFT_CHARGE = 1.2;   // extra gauge fill rate while drifting (stats.driftCharge)
@@ -9,10 +11,13 @@ const MAGNET_RANGE = 150, MAGNET_CATCH = 8;   // m along the track: pick a car a
 const MAGNET_LEAD = { dur: 1, pow: 0.15 };    // nobody ahead: short weak boost instead
 const MAGNET_DOCK = 16;   // m/s^2: the pull closes in no faster than this much braking could shed by MAGNET_CATCH
 const DOMAIN_R = 45, DOMAIN_BOOST = 0.2, DOMAIN_MAX_SLOW = 0.6;
+const ROBOT_T = 0.35, ROBOT_BOOST = 1.5;   // robotdash: transform time each way, boost after changing back
+const KNOCK = { side: 12, spin: 0.4, keep: 0.7, again: 0.6 };   // robot hit: sideways m/s, spin s, speed kept, s before the same car again
+const CURB_CURV = 1 / 130, CURB_SPAN = 14;   // world.js lays curbs where |curv| exceeds this within ± this many samples
 const COLOR = {
   boost: '#5fe3ff', nitro: '#ff9a3c', oil: '#b6ff3b', shield: '#5ef1ff',
   warp: '#6fe0ff', timeslow: '#c77dff', phase: '#ff8fd8', thunderbolt: '#ffe14d',
-  magnet: '#ff4d6a', domain: '#b36bff',
+  magnet: '#ff4d6a', domain: '#b36bff', downforce: '#56c8ff', robotdash: '#ffb347',
 };
 const pal = (...h) => h.map(x => new THREE.Color(x));
 const PAL = {
@@ -25,6 +30,8 @@ const PAL = {
   thunderbolt: pal('#ffffff', '#fff27a', '#ffd23f', '#9fe4ff', '#3a8bff'),
   magnet: pal('#ffffff', '#ff5a6e', '#ff2a3a', '#5a8bff', '#2a5bff'),
   domain: pal('#f3e0ff', '#c77dff', '#9b3dff', '#6a1fd0', '#3b1466'),
+  downforce: pal('#ffffff', '#bff0ff', '#56c8ff', '#2a7bff'),
+  robotdash: pal('#ffffff', '#fff1c9', '#ffb347', '#ff6b1a'),
   oil: pal('#0b0a10', '#17131f', '#2b2438'),
   smoke: pal('#8a8f99', '#6b707a', '#a2a7b0'),
   spark: pal('#fff6b0', '#ffd23f', '#ffffff'),
@@ -37,7 +44,10 @@ const clamp = THREE.MathUtils.clamp;
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 const easeOut = k => 1 - (1 - k) ** 3;
 const easeOutBack = k => 1 + 2.70158 * (k - 1) ** 3 + 1.70158 * (k - 1) ** 2;
+const smooth01 = k => { k = clamp(k, 0, 1); return k * k * (3 - 2 * k); };
 const isHuman = c => c.control === 'p1' || c.control === 'p2';
+// robot form (incl. both transforms): immune, not slowed by hits, knocks others away
+const isRobot = c => c.ability?.id === 'robotdash' && c.ability.active > 0 && c.ability.t < c.ability.robotDur + ROBOT_T;
 const flash = (race, text, color) => race.hud?.flash?.(text, color);
 const who = (race, car) => (race.mode === 'split' ? (car.control === 'p1' ? 'P1 ' : 'P2 ') : '');
 const _v = new THREE.Vector3(), _w = new THREE.Vector3();
@@ -214,6 +224,21 @@ const beamTex = () => canvasTex(64, g => {
   g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
 });
 
+// downforce airflow (u along the streak, scrolled downstream): faint line + comets with their bright heads downstream
+function flowTex() {
+  const t = canvasTex(256, g => {
+    g.fillStyle = '#1c1c1c'; g.fillRect(0, 0, 256, 256);
+    for (const [x, w] of [[14, 76], [118, 44], [178, 62]]) {
+      const gr = g.createLinearGradient(x, 0, x + w, 0);
+      gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(0.85, 'rgba(255,255,255,0.85)'); gr.addColorStop(1, '#fff');
+      g.fillStyle = gr; g.fillRect(x, 0, w, 256);
+    }
+  });
+  t.wrapS = THREE.RepeatWrapping;
+  t.repeat.set(2, 1);
+  return t;
+}
+
 // splat shape as grayscale alphaMap (max extent ≈ 0.86 of half size)
 const blobTex = () => canvasTex(256, g => {
   g.fillStyle = '#000'; g.fillRect(0, 0, 256, 256);
@@ -274,20 +299,21 @@ function st(race) {
   return S;
 }
 
-const TEX = { clock: clockTex, film: filmTex, beam: beamTex, rune: runeTex, blobs: () => [blobTex(), blobTex(), blobTex()] };
+const TEX = { clock: clockTex, film: filmTex, beam: beamTex, rune: runeTex, flow: flowTex, blobs: () => [blobTex(), blobTex(), blobTex()] };
 function tex(S, key) {
   return (S.tex[key] ||= TEX[key]());
 }
 
-// transient world FX (rings, flashes): tick(obj, k) with k 0→1
+// transient world FX (rings, flashes): tick(obj, k) with k 0→1. Returns obj (may be re-parented, e.g. to ride along with a car)
 function addFx(S, obj, life, tick) {
   S.root.add(obj);
   S.fx.push({ obj, t: 0, life, tick });
   tick(obj, 0);
+  return obj;
 }
 function dropFx(f) {
   f.obj.removeFromParent();
-  f.obj.material.dispose();
+  if (!f.obj.userData.keepMat) f.obj.material.dispose();
   if (f.obj.userData.ownGeo) f.obj.geometry.dispose();
 }
 
@@ -297,7 +323,7 @@ function ring(S, p, color, { vertical = false, heading = 0, r0 = 1, r1 = 8, life
   }));
   m.position.copy(p);
   if (vertical) m.rotation.y = heading; else m.rotation.x = -Math.PI / 2;
-  addFx(S, m, life, (o, k) => { o.scale.setScalar(r0 + (r1 - r0) * easeOut(k)); o.material.opacity = opacity * (1 - k); });
+  return addFx(S, m, life, (o, k) => { o.scale.setScalar(r0 + (r1 - r0) * easeOut(k)); o.material.opacity = opacity * (1 - k); });
 }
 
 function glowBall(S, p, r, life, color = '#e8fbff') {
@@ -305,7 +331,7 @@ function glowBall(S, p, r, life, color = '#e8fbff') {
     color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
   }));
   m.position.copy(p);
-  addFx(S, m, life, (o, k) => { o.scale.setScalar(0.2 + r * easeOut(k)); o.material.opacity = (1 - k) ** 2; });
+  return addFx(S, m, life, (o, k) => { o.scale.setScalar(0.2 + r * easeOut(k)); o.material.opacity = (1 - k) ** 2; });
 }
 
 // ---------- per-car visuals (children of car.mesh, flagged so phase ignores them) ----------
@@ -319,7 +345,7 @@ function carFx(car) {
   const saved = [m.position.clone(), m.quaternion.clone(), m.scale.clone()];
   m.position.set(0, 0, 0); m.quaternion.identity(); m.scale.set(1, 1, 1);
   m.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(m);
+  const box = new THREE.Box3().setFromObject(a.body || m);   // robotdash: the car, not the 3.8 m robot under it
   m.position.copy(saved[0]); m.quaternion.copy(saved[1]); m.scale.copy(saved[2]);
   m.updateMatrixWorld(true);
   if (box.isEmpty() || box.getSize(_v).length() > 20) box.set(new THREE.Vector3(-0.9, 0, -2.1), new THREE.Vector3(0.9, 1.3, 2.1));
@@ -447,6 +473,100 @@ function magnetLines(S, M, car, fx, tg, t, dt, vx, vz) {
   }
 }
 
+// downforce: glowing airflow streaks over the roof and along the flanks (one merged mesh, dash texture scrolled
+// downstream, faded at both ends via vertex colours) and a hologram rear wing
+function aeroMeshes(S, fx) {
+  if (fx.aero) return fx.aero;
+  const { box: b, size: sz, center: c } = fx, hl = sz.z / 2, hw = sz.x / 2, SEG = 48, RAD = 5;
+  const tube = pts => {
+    const g = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), SEG, 0.03, RAD, false);
+    const col = new Float32Array(g.attributes.position.count * 3);
+    for (let i = 0; i <= SEG; i++) col.fill(Math.min(1, i / SEG * 5, (1 - i / SEG) * 3), i * (RAD + 1) * 3, (i + 1) * (RAD + 1) * 3);
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    return g;
+  };
+  const geos = [-0.45, 0, 0.45].map(x => {   // nose -> over the roof -> off the tail at wing height (q: +1 nose, -1 tail)
+    const pts = [];
+    for (let i = 0; i <= 10; i++) {
+      const q = 1.35 - i * 0.29, e = Math.sqrt(Math.max(0, 1 - q * q));
+      pts.push(new THREE.Vector3(c.x + x * hw, b.min.y + sz.y * (0.45 + 0.55 * (q < 0 ? Math.max(e, 0.75) : e)) + 0.12, c.z + q * hl));
+    }
+    return tube(pts);
+  });
+  for (const k of [1, -1]) geos.push(tube([1.3, 0.3, -0.6, -1.5].map(q => new THREE.Vector3(c.x + k * (hw + 0.1 + 0.06 * (1 - Math.abs(q))), b.min.y + sz.y * 0.5, c.z + q * hl))));
+  const glowMat = (color, extra) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, toneMapped: false, ...extra });
+  const streaks = new THREE.Mesh(mergeGeometries(geos), glowMat(COLOR.downforce, { map: tex(S, 'flow'), vertexColors: true }));
+  geos.forEach(g => g.dispose());
+  const wy = b.max.y + 0.14, wz = b.min.z + 0.5, span = sz.x * 0.94;
+  const parts = [new THREE.BoxGeometry(span, 0.04, 0.42).translate(c.x, wy, wz), ...[1, -1].map(k => new THREE.BoxGeometry(0.05, 0.36, 0.22).translate(c.x + k * span * 0.3, wy - 0.18, wz))];
+  const wing = new THREE.Mesh(mergeGeometries(parts), glowMat('#2f8cff', { side: THREE.DoubleSide }));
+  parts.forEach(g => g.dispose());
+  streaks.renderOrder = wing.renderOrder = 22;
+  streaks.visible = wing.visible = false;
+  fx.group.add(streaks, wing);
+  fx.mats.push(streaks.material, wing.material);
+  (fx.geos ||= []).push(streaks.geometry, wing.geometry);
+  return (fx.aero = { streaks, wing });
+}
+
+function onCurb(tr, i) {
+  const N = tr.samples.length;
+  for (let k = -CURB_SPAN; k <= CURB_SPAN; k++) if (Math.abs(tr.samples[(i + k + N) % N].curv) > CURB_CURV) return true;
+  return false;
+}
+
+// robotdash: build the robot once, hidden under the car mesh; the car's own parts move into a.body so the two can swap.
+// Lights stay put (hiding a light changes the light count: every material recompiles).
+function attachRobot(car) {
+  const a = car.ability;
+  buildRobotMesh(car.look).then(r => {
+    const m = car.mesh;
+    if (a.gone || car.ability !== a || a.robot || !m) return;
+    const body = new THREE.Group();
+    for (const c of [...m.children]) if ((c.isMesh || c.isGroup) && !c.userData.abilFx) body.add(c);
+    m.add(body);
+    r.visible = false;
+    m.add(r);
+    a.body = body;
+    a.robot = r;
+  }).catch(e => console.warn('robot', e));
+}
+
+// car <-> robot: white flash, rings and body panels flying off, riding along with the car (children of its fx group)
+function transformFx(S, car, fx, toRobot) {
+  const c = fx.center, y = toRobot ? 1.9 : 1.1;
+  const fly = [
+    glowBall(S, _w.set(c.x, y, c.z), toRobot ? 3.2 : 2.4, 0.3, '#ffffff'),
+    ring(S, _w.set(c.x, y, c.z), '#ffffff', { vertical: true, r0: 0.4, r1: toRobot ? 4.5 : 3.5, life: 0.4 }),
+    ring(S, _w.set(c.x, 0.15, c.z), COLOR.robotdash, { r0: 1, r1: 7, life: 0.5, opacity: 0.8 }),
+  ];
+  S.geo.panel ||= new THREE.BoxGeometry(0.46, 0.05, 0.32);
+  // two panel materials kept per car (disposed with fx.mats): fresh ones each transform compiled a shader program
+  // that disposing the last panel then threw away again (a frame hitch every change)
+  if (!fx.panel) {
+    fx.panel = [car.look?.body || COLOR.robotdash, '#dfe3ea'].map(color => new THREE.MeshStandardMaterial({ color, metalness: 0.5, roughness: 0.35, transparent: true }));
+    fx.mats.push(...fx.panel);
+  }
+  for (let i = 0; i < 14; i++) {
+    const p0 = new THREE.Vector3(c.x + rnd(-0.8, 0.8), rnd(0.3, toRobot ? 1.3 : 2.8), c.z + rnd(-1.8, 1.8));
+    const v = new THREE.Vector3(rnd(-1, 1), rnd(0.2, 1.3), rnd(-1, 1)).normalize().multiplyScalar(rnd(4, 9));
+    const w = new THREE.Vector3(rnd(-14, 14), rnd(-14, 14), rnd(-14, 14));
+    const panel = new THREE.Mesh(S.geo.panel, fx.panel[i % 4 ? 0 : 1]);
+    panel.userData.keepMat = true;
+    fly.push(addFx(S, panel, 0.55, (o, k) => {
+      const s = k * 0.55;
+      o.position.set(p0.x + v.x * s, p0.y + v.y * s - 7 * s * s, p0.z + v.z * s);
+      o.rotation.set(w.x * s, w.y * s, w.z * s);
+      o.material.opacity = 1 - k * k;
+    }));
+  }
+  for (const o of fly) fx.group.add(o);
+  const vx = car.vel?.x || 0, vz = car.vel?.z || 0;
+  for (let i = 0; i < 50; i++) {
+    S.glow.emit(car.pos.x + rnd(-1, 1), car.pos.y + rnd(0.3, 2.2), car.pos.z + rnd(-1, 1), vx + rnd(-6, 6), rnd(0, 5), vz + rnd(-6, 6), pick(PAL.robotdash), rnd(0.3, 0.6), 0.5, 0.05, 4, 1.5);
+  }
+}
+
 // phase: swap this car's materials for transparent clones (materials may be shared between cars)
 function walk(o, fn) {
   if (o.userData.abilFx) return;
@@ -487,6 +607,8 @@ function carVisuals(race, S, car, dt) {
   a.hit = Math.max(0, a.hit - dt * 2.5);
   a.slowVis += ((a.slow > 0 ? 1 : 0) - a.slowVis) * Math.min(1, dt * 6);
   if (a.slowVis < 0.005) a.slowVis = 0;
+  a.dfVis += ((act === 'downforce' ? Math.min(1, Math.abs(car.speed) / 45) * 0.7 : 0) - a.dfVis) * Math.min(1, dt * 5);   // speed lines
+  if (a.dfVis < 0.005) a.dfVis = 0;
   if (!act && !a.slowVis && !a.fx && !(car.spin > 0)) return;
   if (a.id === 'phase') setPhase(car, act === 'phase');
   const fx = carFx(car);
@@ -597,6 +719,47 @@ function carVisuals(race, S, car, dt) {
     if (tg?.pos) magnetLines(S, M, car, fx, tg, t, dt, vx, vz);
   }
 
+  if (a.id === 'downforce' && (act || fx.aero)) {
+    const A = aeroMeshes(S, fx), on = act === 'downforce';
+    A.streaks.visible = A.wing.visible = on;
+    if (on) {
+      const o = Math.min(1, a.t * 4, a.active * 2);
+      A.streaks.material.opacity = o * (0.55 + 0.45 * Math.min(1, Math.abs(car.speed) / 40));
+      A.wing.material.opacity = o * (0.45 + 0.2 * Math.sin(t * 9));
+      const tr = race.track, s = tr?.samples?.[car.trackIndex];
+      if (s?.right && car.speed > 12 && onCurb(tr, car.trackIndex)) {   // pressed onto the curb: sparks from under the car
+        const W2 = tr.width / 2, lat = (car.pos.x - s.pos.x) * s.right.x + (car.pos.z - s.pos.z) * s.right.z, sg = Math.sign(lat);
+        if (Math.abs(lat) > W2 - 1.1 && Math.abs(lat) < W2 + 2.2) {
+          const px = car.pos.x + s.right.x * sg * 0.75, pz = car.pos.z + s.right.z * sg * 0.75;
+          for (let n = Math.floor(dt * 90 + Math.random()); n > 0; n--) {
+            const along = rnd(-1.4, 1.4), back = rnd(2, 6);
+            S.glow.emit(px + sh * along, car.pos.y + 0.08, pz + ch * along, vx * 0.55 - sh * back + rnd(-1.5, 1.5), rnd(0.5, 3), vz * 0.55 - ch * back + rnd(-1.5, 1.5),
+              pick(PAL.spark), rnd(0.15, 0.35), 0.3, 0.05, 9, 0.5);
+          }
+        }
+      }
+    }
+  }
+
+  if (a.id === 'robotdash' && a.robot && a.body) {
+    const ph = !act ? 0 : a.t < a.robotDur ? 1 : a.t < a.robotDur + ROBOT_T ? 2 : 3;   // car / robot / changing back / boost
+    if (ph !== a.robotPh) {
+      if (ph === 1 || ph === 2) transformFx(S, car, fx, ph === 1);
+      if (ph === 3 && isHuman(car)) flash(race, who(race, car) + '大加速!', COLOR.robotdash);
+      a.robotPh = ph;
+    }
+    const k = ph === 1 ? Math.min(1, a.t / ROBOT_T) : ph === 2 ? 1 - (a.t - a.robotDur) / ROBOT_T : 0;   // 0 car .. 1 robot
+    const kc = smooth01(k / 0.6), kr = clamp((k - 0.35) / 0.65, 0, 1);   // the car spins down into panels, the robot grows in
+    a.body.visible = kc < 1;
+    a.body.scale.setScalar(Math.max(1e-3, 1 - kc));
+    a.body.rotation.y = kc * Math.PI * 1.5;
+    a.robot.visible = kr > 0;
+    if (kr > 0) {
+      a.robot.scale.setScalar(Math.max(1e-3, easeOutBack(kr)));
+      a.robot.userData.anim?.(t, car.speed);
+    }
+  }
+
   if (car.spin > 0 && Math.random() < dt * 25) {   // dizzy sparkles
     const th = t * 9 + rnd(-0.3, 0.3);
     world(_w.set(Math.cos(th) * 0.9, fx.box.max.y + 0.5, Math.sin(th) * 0.9));
@@ -619,13 +782,18 @@ function applyOwn(race, car, a) {
   else if (a.id === 'phase') { m.noCollide = true; m.noOffroadPenalty = true; m.speedMul += a.power; }
   else if (a.id === 'thunderbolt') { m.speedMul += THUNDER_BOOST; m.accelMul += THUNDER_BOOST; }   // a.power = victim's spin
   else if (a.id === 'domain') { m.speedMul += DOMAIN_BOOST; m.accelMul += DOMAIN_BOOST; }        // a.power = slow inside the dome
+  else if (a.id === 'downforce') m.downforce = a.power;
+  else if (a.id === 'robotdash') {
+    if (isRobot(car)) m.invulnerable = true;
+    else { m.speedMul += a.power; m.accelMul += a.power; }   // changed back: the dash
+  }
 }
 
 function endFx(S, car) {
   const a = car.ability, p = _w.set(car.pos.x, car.pos.y + 0.8, car.pos.z);
   if (a.id === 'shield') burst(S.glow, p, 40, PAL.shield, 8, 0.5, 0.45, 0.05);
   else if (a.id === 'phase') { setPhase(car, false); burst(S.glow, p, 30, PAL.phase, 5, 0.6, 0.4, 0.05); }
-  else if (a.id === 'thunderbolt' || a.id === 'magnet' || a.id === 'domain') burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
+  else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
   else burst(S.smoke, p, 10, PAL.smoke, 2, 0.8, 0.5, 1.4, -0.5, 1.5, 0.25);
 }
 
@@ -972,6 +1140,11 @@ function start(race, car, id, dur, pow, pose, target = null) {
     a.power = pow;
     a.t = 0;
     a.target = id === 'magnet' ? target : null;
+    if (id === 'robotdash') {   // robot for dur (transform in included), change back, then the dash
+      a.robotDur = dur;
+      a.active = a.activeMax = dur + ROBOT_T + ROBOT_BOOST;
+      if (car.control !== 'net') car.spin = 0;   // shakes off a spin in progress
+    }
   }
   if (id === 'thunderbolt') strike(race, S, target, pow);
   const c = PAL[id];
@@ -979,23 +1152,29 @@ function start(race, car, id, dur, pow, pose, target = null) {
   if (id !== 'timeslow') ring(S, _w.copy(at).setY(at.y + 0.15), COLOR[id], { r0: 1.5, r1: 6, life: 0.4, opacity: 0.8 });
 }
 
-// ---------- tint overlays for local players: slowed (timeslow) / caught in a domain ----------
-const TINTS = [
-  ['slowVis', 'radial-gradient(ellipse at center, rgba(150,70,255,0.07) 35%, rgba(110,30,220,0.55) 100%)'],
-  ['domVis', 'radial-gradient(ellipse at center, rgba(60,10,110,0.22) 25%, rgba(35,0,70,0.62) 70%, rgba(15,0,30,0.88) 100%)'],
+// ---------- tint overlays for local players: slowed (timeslow) / caught in a domain / downforce speed lines ----------
+// the element is 1.8x its viewport (inset -40%), so these stops are 50% / 95% of the visible half-size
+const RAYS_MASK = 'radial-gradient(closest-side, transparent 28%, #000 53%)';
+const TINTS = [   // [key, style, keyframes of an endless stepped animation]
+  ['slowVis', { background: 'radial-gradient(ellipse at center, rgba(150,70,255,0.07) 35%, rgba(110,30,220,0.55) 100%)' }],
+  ['domVis', { background: 'radial-gradient(ellipse at center, rgba(60,10,110,0.22) 25%, rgba(35,0,70,0.62) 70%, rgba(15,0,30,0.88) 100%)' }],
+  // thin rays toward the edges; oversized so the jittering turn never shows a corner (the viewport clips it)
+  ['dfVis', { inset: '-40%', background: 'repeating-conic-gradient(rgba(215,245,255,0) 0deg 2.4deg, rgba(215,245,255,0.55) 2.6deg 2.9deg, rgba(215,245,255,0) 3.1deg 5deg)', maskImage: RAYS_MASK, webkitMaskImage: RAYS_MASK },
+    [{ transform: 'rotate(0deg)' }, { transform: 'rotate(15deg)' }]],
 ];
 function updateTint(race, S) {
   if (typeof document === 'undefined') return;
   for (const car of race.cars) {
     if (!isHuman(car) || !car.ability) continue;
-    for (const [key, bg] of TINTS) {
+    for (const [key, style, spin] of TINTS) {
       const v = Math.round((car.ability[key] || 0) * 100) / 100;
       let el = S.tint[car.control + key];
       if (!el) {
         const layer = race.hud?.layer?.(car);   // this car's viewport, under its HUD
         if (!v || !layer) continue;
         el = S.tint[car.control + key] = document.createElement('div');
-        Object.assign(el.style, { position: 'absolute', inset: '0', pointerEvents: 'none', opacity: '0', background: bg });
+        Object.assign(el.style, { position: 'absolute', inset: '0', pointerEvents: 'none', opacity: '0' }, style);
+        if (spin) el.animate?.(spin, { duration: 400, iterations: Infinity, easing: 'steps(5)' });
         layer.appendChild(el);
       }
       if (el.__v !== v) { el.__v = v; el.style.opacity = String(v); }
@@ -1009,9 +1188,35 @@ export function initAbility(race, car) {
   car.ability = {
     id, name: ABILITIES[id].name, gauge: 0, active: 0, activeMax: 0, power: 0, t: 0,
     slow: 0, slowVis: 0, hit: 0, fx: null, phaseSwap: null, target: null, sealed: false, domVis: 0,
+    dfVis: 0, robot: null, body: null, robotDur: 0, robotPh: 0,
   };
   car.spin ??= 0;
+  if (id === 'robotdash') attachRobot(car);
   return car.ability;
+}
+
+// car–car contact (game.js collide, after the usual response): a robot sends the other car flying sideways.
+// Only this client's own cars: a remote victim's own client does it when its car meets the robot there.
+// Shielded cars are immune; phase cars never touch.
+export function robotKnock(race, a, b) {
+  for (const [r, v] of [[a, b], [b, a]]) {
+    if (!isRobot(r) || isRobot(v) || v.control === 'net' || v.mods?.invulnerable) continue;
+    const va = v.ability || initAbility(race, v), S = st(race);
+    if (S.time - (va.knockAt ?? -9) < KNOCK.again) continue;
+    va.knockAt = S.time;
+    const rx = -Math.cos(v.heading), rz = Math.sin(v.heading);   // v's right
+    let side = (v.pos.x - r.pos.x) * rx + (v.pos.z - r.pos.z) * rz;
+    if (Math.abs(side) < 0.1) side = Math.random() - 0.5;
+    const dx = rx * Math.sign(side), dz = rz * Math.sign(side);
+    v.vel.multiplyScalar(KNOCK.keep);
+    v.vel.x += dx * KNOCK.side; v.vel.z += dz * KNOCK.side;
+    v.spin = Math.max(v.spin || 0, KNOCK.spin);
+    const p = _w.set((r.pos.x + v.pos.x) / 2, (r.pos.y + v.pos.y) / 2 + 1, (r.pos.z + v.pos.z) / 2);
+    glowBall(S, p, 2.2, 0.2, '#fff1c9');
+    ring(S, p, COLOR.robotdash, { vertical: true, heading: Math.atan2(dx, dz), r0: 0.5, r1: 4, life: 0.35 });
+    for (let i = 0; i < 40; i++) S.glow.emit(p.x, p.y, p.z, v.vel.x * 0.6 + rnd(-7, 7), rnd(0, 6), v.vel.z * 0.6 + rnd(-7, 7), pick(PAL.robotdash), rnd(0.25, 0.5), 0.45, 0.05, 10, 1.5);
+    if (isHuman(v)) flash(race, who(race, v) + 'ふっとばされた!', COLOR.robotdash);
+  }
 }
 
 export function updateAbilities(race, dt) {
@@ -1077,6 +1282,7 @@ export function updateAbilities(race, dt) {
 
   for (const car of race.cars) carVisuals(race, S, car, dt);
   if (S.tex.film) S.tex.film.rotation += dt * 0.25;
+  if (S.tex.flow) S.tex.flow.offset.x -= dt * 4;
 
   j = 0;
   for (const f of S.fx) {
@@ -1142,7 +1348,10 @@ export function clearAbilities(race) {
     if (!a) continue;
     setPhase(car, false);
     if (a.fx) { a.fx.group.removeFromParent(); a.fx.mats.forEach(m => m.dispose()); a.fx.aura?.geometry.dispose(); a.fx.geos?.forEach(g => g.dispose()); a.fx = null; }
-    a.active = a.slow = a.slowVis = a.domVis = 0;
+    a.gone = true;   // a robot still loading must not attach any more
+    if (a.body) { a.body.visible = true; a.body.scale.setScalar(1); a.body.rotation.y = 0; }
+    if (a.robot) a.robot.visible = false;   // stays under the car mesh: stopRace disposes it with the scene
+    a.active = a.slow = a.slowVis = a.domVis = a.dfVis = a.robotPh = 0;
     a.sealed = false;
     a.target = null;
   }
