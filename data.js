@@ -20,6 +20,8 @@ export const ABILITIES = {
   timeslow: { name: 'タイムスロー', desc: '自分以外の全員を数秒スローに',             fill: 26, duration: 3,   power: 0.4 },  // power = speed reduction (0.4 -> x0.6)
   phase:    { name: 'ファントム',   desc: 'すり抜け＆コース外でも減速しない',         fill: 22, duration: 5,   power: 0.10 }, // power = extra speed
   thunderbolt: { name: 'サンダーボルト', desc: '1位の車（自分が1位なら2位）に雷を落としてスピン！自分は加速', fill: 26, duration: 1.5, power: 1.4 }, // duration = own boost s, power = target spin s
+  magnet:   { name: 'マグネット',   desc: '前の車に吸い寄せられて急加速！一気に追いつく', fill: 18, duration: 3, power: 0.45 }, // power = own speed/accel bonus until ~8 m behind the car ahead
+  domain:   { name: '結界展開',     desc: '自分を中心に巨大な結界を展開。中の相手は大きく減速し能力を封印される。自分は加速', fill: 28, duration: 6, power: 0.45 }, // power = speed reduction inside (max 0.6)
 };
 
 // Passive traits (R cars).
@@ -43,11 +45,13 @@ export const CARS = [
   { id: 'r_rally',  name: 'ダストラリー',      rarity: 'R',  body: 'rally',   color: '#3a86ff', ability: 'boost', passive: 'drift',  base: { top: 57, accel: 17, grip: 0.86, steer: 2.3, mass: 1.0 } },
   { id: 'sr_nitro', name: 'ニトロ・ファルコン', rarity: 'SR', body: 'formula', color: '#e5383b', ability: 'nitro', passive: null,     base: { top: 66, accel: 19, grip: 0.88, steer: 2.2, mass: 0.9 } },
   { id: 'sr_oil',   name: 'スリック・ヴァイパー', rarity: 'SR', body: 'wedge', color: '#38b000', ability: 'oil',   passive: null,     base: { top: 64, accel: 19, grip: 0.86, steer: 2.2, mass: 1.0 } },
+  { id: 'sr_magnet', name: 'マグネ・ビートル', rarity: 'SR', body: 'wedge', color: '#1fa7a0', ability: 'magnet', passive: null, base: { top: 65, accel: 20, grip: 0.87, steer: 2.2, mass: 1.1 } },
   { id: 'sr_shield',name: 'アイアン・ブルワーク', rarity: 'SR', body: 'tank',  color: '#6c757d', ability: 'shield',passive: null,     base: { top: 62, accel: 18, grip: 0.84, steer: 2.0, mass: 1.8 } },
   { id: 'ur_warp',  name: 'ディメンション・シャーク', rarity: 'UR', body: 'shark', color: '#4cc9f0', ability: 'warp', passive: null, base: { top: 70, accel: 21, grip: 0.90, steer: 2.3, mass: 1.1 } },
   { id: 'ur_time',  name: 'クロノ・ドラゴン',  rarity: 'UR', body: 'dragon',  color: '#7b2cbf', ability: 'timeslow', passive: null, base: { top: 69, accel: 21, grip: 0.90, steer: 2.3, mass: 1.2 } },
   { id: 'ur_phase', name: 'スシ・ファントム',  rarity: 'UR', body: 'sushi',   color: '#ff8fa3', ability: 'phase', passive: null,    base: { top: 71, accel: 20, grip: 0.89, steer: 2.4, mass: 1.0 } },
   { id: 'ur_thunder', name: 'サンダー・ドラゴンX', rarity: 'UR', body: 'dragon', color: '#ffd23f', ability: 'thunderbolt', passive: null, base: { top: 74, accel: 22, grip: 0.90, steer: 2.4, mass: 1.3 } },
+  { id: 'ur_domain', name: 'アビス・サンクチュアリ', rarity: 'UR', body: 'tank', color: '#3b1466', ability: 'domain', passive: null, base: { top: 71, accel: 21, grip: 0.90, steer: 2.3, mass: 1.3 } },
 ];
 for (const c of CARS) c.modelRot ??= Math.PI / 2;   // models/*.glb are authored nose toward -X
 export const CAR_BY_ID = Object.fromEntries(CARS.map(c => [c.id, c]));

@@ -83,7 +83,7 @@ async function setup(ctx, root, opts, mode) {
   const race = ctx.race = {
     THREE, scene, time: 0, state: 'countdown', mode, def, cars: [], track,
     net: mode === 'online' ? (opts.net || null) : null, localPid: opts.localPid ?? null,
-    hazards: [], hud: { flash: (text, color) => flashAll(ctx, text, color) },
+    hazards: [], hud: { flash: (text, color) => flashAll(ctx, text, color), layer: car => ctx.viewByCar?.get(car)?.hud.tints },
   };
   ctx.worldFx = await buildWorld(ctx, def);
   if (R !== ctx) return;
@@ -525,7 +525,7 @@ function makeView(ctx, car, keys, idx, total) {
   const d = el(ctx.wrap, 'div', 'rg-vp' + (total > 1 ? ' small' : ''));
   d.style.top = (idx * 100 / total) + '%';
   d.style.height = (100 / total) + '%';
-  d.innerHTML = `<div class="rg-vig"></div><div class="rg-labels"></div>
+  d.innerHTML = `<div class="rg-vig"></div><div class="rg-tints"></div><div class="rg-labels"></div>
     <div class="rg-tl"><div class="rg-pos"></div><div class="rg-lap"></div>${total > 1 ? `<div class="rg-who">P${idx + 1}　${esc(car.name)}</div>` : ''}</div>
     <div class="rg-tr"><div class="rg-time">0:00.00</div><div class="rg-sub rg-cur"></div><div class="rg-sub rg-best"></div><div class="rg-ghost"></div></div>
     <div class="rg-tags"><span class="rg-tag slip">スリップストリーム</span><span class="rg-tag drift">ドリフト</span><span class="rg-tag turbo">ブースト!</span><span class="rg-tag wrong">逆走中!</span></div>
@@ -545,7 +545,7 @@ function makeView(ctx, car, keys, idx, total) {
       root: d, pos: q('.rg-pos'), lap: q('.rg-lap'), time: q('.rg-time'), cur: q('.rg-cur'), best: q('.rg-best'), ghost: q('.rg-ghost'),
       count: q('.rg-count'), flash: q('.rg-flash'), msg: q('.rg-msg'), kmh: q('.rg-kmh b'), arc: q('.rg-arc'),
       abil: q('.rg-abil'), abilName: q('.rg-abil-name'), bar: q('.rg-bar i'), ready: q('.rg-ready'), map,
-      slip: q('.rg-tag.slip'), drift: q('.rg-tag.drift'), turbo: q('.rg-tag.turbo'), wrong: q('.rg-tag.wrong'), vig: q('.rg-vig'),
+      slip: q('.rg-tag.slip'), drift: q('.rg-tag.drift'), turbo: q('.rg-tag.turbo'), wrong: q('.rg-tag.wrong'), vig: q('.rg-vig'), tints: q('.rg-tints'),
       labels: q('.rg-labels'), labelEls: new Map(),
     },
   };
@@ -625,11 +625,12 @@ function updateHud(ctx, v) {
   if (ab) {
     const def = ABILITIES[ab.id];
     setText(h.abilName, def ? def.name : String(ab.id));
-    const g = clamp(ab.gauge || 0, 0, 1), on = (ab.active || 0) > 0;
+    const g = clamp(ab.gauge || 0, 0, 1), on = (ab.active || 0) > 0, sealed = !!ab.sealed && !on;
     setStyle(h.bar, 'width', (on ? 100 : Math.round(g * 100)) + '%');
-    setCls(h.abil, 'ready', g >= 1 && !on);
+    setCls(h.abil, 'ready', g >= 1 && !on && !sealed);
     setCls(h.abil, 'active', on);
-    setText(h.ready, on ? '発動中!' : g >= 1 ? 'READY!' : '');
+    setCls(h.abil, 'sealed', sealed);
+    setText(h.ready, on ? '発動中!' : sealed ? '封印中' : g >= 1 ? 'READY!' : '');
   }
   const boosting = car.mods.speedMul > 1.02 || car.mods.accelMul > 1.02;
   setCls(h.slip, 'on', c.slip > 0.02);
@@ -1403,7 +1404,7 @@ const CSS = `
 @media (max-width:900px),(max-height:640px){.rg-vp{--z:.72}.rg-vp.small{--z:.55}}
 @media (max-width:640px),(max-height:420px){.rg-vp{--z:.55}.rg-vp.small{--z:.45}}
 .rg-vig{position:absolute;inset:0;opacity:0;transition:opacity .25s;background:radial-gradient(ellipse at center,transparent 50%,rgba(255,120,30,.28) 85%,rgba(255,80,20,.5) 100%)}
-.rg-labels{position:absolute;inset:0}
+.rg-tints,.rg-labels{position:absolute;inset:0}
 .rg-label{position:absolute;left:0;top:0;padding:2px 8px;border-radius:8px;font-size:12px;font-weight:700;background:rgba(10,14,24,.55);border-bottom:3px solid #fff;white-space:nowrap;will-change:transform}
 .rg-tl{position:absolute;left:22px;top:16px;transform:scale(var(--z));transform-origin:0 0}
 .rg-pos{font:italic 900 64px/1 system-ui,sans-serif;letter-spacing:-2px;background:linear-gradient(180deg,#fff,#9fe8ff);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;filter:drop-shadow(0 3px 6px rgba(0,0,0,.6))}
@@ -1456,6 +1457,8 @@ const CSS = `
 .rg-ready{height:26px;font:italic 900 22px/26px system-ui,sans-serif;color:#ffd23f;letter-spacing:.08em}
 .rg-abil.ready .rg-ready{animation:rgpulse .5s infinite alternate}
 .rg-abil.active .rg-ready{color:#5dffb0}
+.rg-abil.sealed .rg-bar i{background:repeating-linear-gradient(135deg,#5a1a9e 0 8px,#2a0a4e 8px 16px);box-shadow:0 0 14px #8a2cff}
+.rg-abil.sealed .rg-ready{color:#c79bff}
 @keyframes rgpulse{from{filter:brightness(1)}to{filter:brightness(1.6)}}
 .rg-map{position:absolute;right:16px;bottom:16px;width:176px;height:176px;transform:scale(var(--z));transform-origin:100% 100%;border-radius:16px;background:rgba(10,14,24,.5);border:1px solid rgba(255,255,255,.18);backdrop-filter:blur(4px)}
 .rg-hint{position:absolute;left:50%;bottom:4px;transform:translateX(-50%);font-size:12px;opacity:.75;background:rgba(0,0,0,.4);padding:3px 12px;border-radius:999px;transition:opacity 1s;z-index:4;white-space:nowrap}

@@ -41,11 +41,12 @@ export function getSave() {
   if (data) return data;
   try { data = JSON.parse(localStorage.getItem(KEY)); } catch { data = null; }
   if (!data || data.v !== 1) data = fresh();
-  // drop cars that no longer exist in data.js
-  for (const id of Object.keys(data.cars)) if (!CAR_BY_ID[id]) delete data.cars[id];
-  if (!Object.keys(data.cars).length) data.cars[STARTER_CAR] = newCarRec(STARTER_CAR);
-  for (const rec of Object.values(data.cars)) migrateRec(rec);
-  for (const p of ['p1', 'p2']) if (!data.cars[data.selected[p]]) data.selected[p] = Object.keys(data.cars)[0];
+  // Records of cars this build doesn't know stay in the save: a newer build in another tab may have added them, and
+  // deleting them here would make this tab's next persist() erase them. The UI only ever lists CARS (owned()).
+  const known = () => Object.keys(data.cars).filter(id => CAR_BY_ID[id]);
+  if (!known().length) data.cars[STARTER_CAR] = newCarRec(STARTER_CAR);
+  for (const id of known()) migrateRec(data.cars[id]);
+  for (const p of ['p1', 'p2']) if (!CAR_BY_ID[data.selected[p]] || !data.cars[data.selected[p]]) data.selected[p] = known()[0];
   if (!Object.hasOwn(TRACK_BY_ID, String(data.lastTrack))) data.lastTrack = DEFAULT_TRACK;
   return data;
 }

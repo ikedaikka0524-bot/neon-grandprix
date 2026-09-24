@@ -5,9 +5,14 @@ import { ABILITIES } from './data.js';
 const OIL_RADIUS = 3, OIL_BEHIND = 4.2;
 const DRIFT_CHARGE = 1.2;   // extra gauge fill rate while drifting (stats.driftCharge)
 const THUNDER_BOOST = 0.3;  // thunderbolt: own speedMul / accelMul bonus while active
+const MAGNET_RANGE = 150, MAGNET_CATCH = 8;   // m along the track: pick a car ahead within range, pull until this close
+const MAGNET_LEAD = { dur: 1, pow: 0.15 };    // nobody ahead: short weak boost instead
+const MAGNET_DOCK = 16;   // m/s^2: the pull closes in no faster than this much braking could shed by MAGNET_CATCH
+const DOMAIN_R = 45, DOMAIN_BOOST = 0.2, DOMAIN_MAX_SLOW = 0.6;
 const COLOR = {
   boost: '#5fe3ff', nitro: '#ff9a3c', oil: '#b6ff3b', shield: '#5ef1ff',
   warp: '#6fe0ff', timeslow: '#c77dff', phase: '#ff8fd8', thunderbolt: '#ffe14d',
+  magnet: '#ff4d6a', domain: '#b36bff',
 };
 const pal = (...h) => h.map(x => new THREE.Color(x));
 const PAL = {
@@ -18,6 +23,8 @@ const PAL = {
   timeslow: pal('#f0dcff', '#c77dff', '#7b2cbf', '#5a3dff'),
   phase: pal('#ffe0f0', '#ff8fd8', '#9ffcff'),
   thunderbolt: pal('#ffffff', '#fff27a', '#ffd23f', '#9fe4ff', '#3a8bff'),
+  magnet: pal('#ffffff', '#ff5a6e', '#ff2a3a', '#5a8bff', '#2a5bff'),
+  domain: pal('#f3e0ff', '#c77dff', '#9b3dff', '#6a1fd0', '#3b1466'),
   oil: pal('#0b0a10', '#17131f', '#2b2438'),
   smoke: pal('#8a8f99', '#6b707a', '#a2a7b0'),
   spark: pal('#fff6b0', '#ffd23f', '#ffffff'),
@@ -139,6 +146,20 @@ void main() {
   gl_FragColor = vec4(uColor * (0.7 + f + uHit), a);
   #include <colorspace_fragment>
 }`;
+// domain dome (unit hemisphere, seen from both sides): dark translucent shell, bright fresnel rim, drifting bands
+const DOMAIN_FRAG = `
+uniform vec3 uColor; uniform float uTime; uniform float uOpacity;
+varying vec3 vN; varying vec3 vV; varying vec3 vP;
+void main() {
+  float f = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.0);
+  float h = clamp(vP.y, 0.0, 1.0);
+  float bands = smoothstep(0.9, 1.0, sin(h * 30.0 - uTime * 1.6) * 0.5 + 0.5);
+  float ribs = smoothstep(0.97, 1.0, sin(atan(vP.z, vP.x) * 16.0 + uTime * 0.25) * 0.5 + 0.5) * (1.0 - h);
+  float base = smoothstep(0.12, 0.0, h);
+  float glow = clamp(f * 0.9 + bands * 0.35 + ribs * 0.4 + base * 0.8, 0.0, 1.0);
+  gl_FragColor = vec4(mix(vec3(0.07, 0.0, 0.14), uColor * 1.6, glow), min((0.3 + glow * 0.7) * uOpacity, 0.95));
+  #include <colorspace_fragment>
+}`;
 
 // ---------- canvas textures ----------
 function canvasTex(size, draw, srgb = true) {
@@ -207,6 +228,26 @@ const blobTex = () => canvasTex(256, g => {
   for (let i = 0; i < 16; i++) at(rnd(85, 114), rnd(3, 9), 0.6);
 }, false);
 
+// domain floor sigil: rings, bands of made-up angular glyphs and a 7-point star (white; tinted by the material)
+const runeTex = () => canvasTex(512, g => {
+  g.translate(256, 256);
+  g.strokeStyle = '#fff'; g.lineCap = g.lineJoin = 'round'; g.shadowColor = '#fff'; g.shadowBlur = 10;
+  const circle = (r, w) => { g.lineWidth = w; g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.stroke(); };
+  const glyph = (a, r, s) => {
+    g.save(); g.rotate(a); g.translate(0, -r); g.lineWidth = 3; g.beginPath();
+    for (let k = 0; k < 5; k++) g.lineTo(Math.round(rnd(-1, 1)) * s, Math.round(rnd(-1, 1)) * s);
+    g.stroke();
+    if (Math.random() < 0.5) { g.beginPath(); g.arc(0, 0, s * 0.3, 0, Math.PI * 2); g.stroke(); }
+    g.restore();
+  };
+  circle(250, 6); circle(234, 2); circle(198, 3); circle(118, 2); circle(52, 3);
+  for (let i = 0; i < 28; i++) glyph(i / 28 * Math.PI * 2, 216, 10);
+  for (let i = 0; i < 12; i++) glyph(i / 12 * Math.PI * 2, 85, 12);
+  g.lineWidth = 3; g.beginPath();
+  for (let i = 0; i <= 7; i++) { const a = i * 2 / 7 * Math.PI * 2; g.lineTo(Math.sin(a) * 198, -Math.cos(a) * 198); }
+  g.stroke();
+});
+
 // ---------- per-race state ----------
 const STATE = new WeakMap();
 
@@ -233,8 +274,9 @@ function st(race) {
   return S;
 }
 
+const TEX = { clock: clockTex, film: filmTex, beam: beamTex, rune: runeTex, blobs: () => [blobTex(), blobTex(), blobTex()] };
 function tex(S, key) {
-  return (S.tex[key] ||= key === 'clock' ? clockTex() : key === 'film' ? filmTex() : key === 'beam' ? beamTex() : [blobTex(), blobTex(), blobTex()]);
+  return (S.tex[key] ||= TEX[key]());
 }
 
 // transient world FX (rings, flashes): tick(obj, k) with k 0→1
@@ -341,6 +383,68 @@ function clockMeshes(S, fx) {
   fx.group.add(ringM, icon);
   fx.mats.push(ringMat, iconMat);
   return (fx.clock = { ring: ringM, icon });
+}
+
+// magnet: floating red / blue horseshoe over the car + field-line ribbons to the target (rewritten in place each frame)
+const ARCS = 8, ARC_SEG = 14;
+function magnetMeshes(S, fx) {
+  const mk = color => new THREE.MeshBasicMaterial({ color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, toneMapped: false });
+  const shoeMats = [mk('#ff3548'), mk('#3d7bff')], tip = mk('#ffffff');
+  S.geo.shoeArc ||= new THREE.TorusGeometry(0.42, 0.12, 10, 12, Math.PI / 2);
+  S.geo.shoeLeg ||= new THREE.CylinderGeometry(0.12, 0.12, 0.42, 12);
+  S.geo.shoeTip ||= new THREE.CylinderGeometry(0.125, 0.125, 0.14, 12);
+  const shoe = new THREE.Group();
+  [1, -1].forEach((s, i) => {   // U: lower quarter arcs, legs up, white pole tips
+    const arc = new THREE.Mesh(S.geo.shoeArc, shoeMats[i]);
+    arc.rotation.z = s > 0 ? -Math.PI / 2 : Math.PI;
+    const leg = new THREE.Mesh(S.geo.shoeLeg, shoeMats[i]);
+    leg.position.set(s * 0.42, 0.21, 0);
+    const tp = new THREE.Mesh(S.geo.shoeTip, tip);
+    tp.position.set(s * 0.42, 0.49, 0);
+    shoe.add(arc, leg, tp);
+  });
+  shoe.position.set(fx.center.x, fx.box.max.y + 0.45, fx.center.z);
+  shoe.visible = false;
+  const lines = ['#ff3a4e', '#4a85ff'].map(c => {
+    const m = new THREE.Mesh(new THREE.BufferGeometry(), boltMat(S, c));
+    m.frustumCulled = false; m.renderOrder = 22; m.visible = false;
+    return m;
+  });
+  const pts = Array.from({ length: ARCS }, () => Array.from({ length: ARC_SEG + 1 }, () => new THREE.Vector3()));
+  const segs = [[], []];
+  pts.forEach((p, i) => { for (let j = 0; j < ARC_SEG; j++) segs[i % 2].push([p[j], p[j + 1], 0.5]); });
+  fx.group.add(shoe, ...lines);
+  fx.mats.push(...shoeMats, tip, ...lines.map(l => l.material));
+  (fx.geos ||= []).push(...lines.map(l => l.geometry));
+  return (fx.magnet = { shoe, shoeMats, lines, pts, segs });
+}
+
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _d = new THREE.Vector3(), _u1 = new THREE.Vector3(), _u2 = new THREE.Vector3();
+function magnetLines(S, M, car, fx, tg, t, dt, vx, vz) {
+  // the lines are children of the car mesh, which is pitched, squatted and rolled too: target in its full frame
+  car.mesh.updateMatrixWorld();
+  const mw = car.mesh.matrixWorld;
+  const A = _a.set(fx.center.x, fx.box.max.y + 0.7, fx.center.z);
+  const B = car.mesh.worldToLocal(_b.set(tg.pos.x, tg.pos.y + 0.8, tg.pos.z));
+  const d = _d.subVectors(B, A);
+  _u1.crossVectors(d, _Y).normalize();   // sideways
+  _u2.crossVectors(_u1, d).normalize();  // up-ish
+  const bulge = clamp(d.length() * 0.15, 3, 8);
+  M.pts.forEach((p, i) => {   // cubic arcs fanning out of both poles around the A→B axis, slowly rotating and breathing
+    const phi = i / ARCS * Math.PI * 2 + t * 1.3, b = bulge * (0.8 + 0.2 * Math.sin(t * 5 + i * 1.7));
+    const ox = (_u1.x * Math.cos(phi) + _u2.x * Math.sin(phi)) * b, oy = (_u1.y * Math.cos(phi) + _u2.y * Math.sin(phi)) * b, oz = (_u1.z * Math.cos(phi) + _u2.z * Math.sin(phi)) * b;
+    for (let j = 0; j <= ARC_SEG; j++) {   // control points A + d/6 + o, B - d/6 + 0.7 o
+      const s = j / ARC_SEG, w0 = (1 - s) ** 3, w1 = 3 * (1 - s) ** 2 * s, w2 = 3 * (1 - s) * s * s, w3 = s ** 3;
+      const f = (w1 - w2) / 6, g = w1 + w2 * 0.7;
+      p[j].set(A.x * (w0 + w1) + B.x * (w2 + w3) + d.x * f + ox * g, A.y * (w0 + w1) + B.y * (w2 + w3) + d.y * f + oy * g, A.z * (w0 + w1) + B.z * (w2 + w3) + d.z * f + oz * g);
+    }
+  });
+  M.lines.forEach((l, k) => { ribbons(M.segs[k], l.geometry); l.material.opacity = 0.55 + 0.45 * Math.sin(t * 12 + k * Math.PI); });
+  const Aw = A.applyMatrix4(mw);   // A is not needed in local space any more
+  for (let n = Math.floor(dt * 60 + Math.random()); n > 0; n--) {   // sparks sliding along the lines toward the car
+    const i = (Math.random() * ARCS) | 0, p = _v.copy(M.pts[i][(Math.random() * ARC_SEG) | 0]).applyMatrix4(mw);
+    S.glow.emit(p.x, p.y, p.z, vx + (Aw.x - p.x) * 1.2, (Aw.y - p.y) * 1.2, vz + (Aw.z - p.z) * 1.2, PAL.magnet[i % 2 ? 3 : 1], rnd(0.3, 0.6), 0.5, 0.1, 0, 0);
+  }
 }
 
 // phase: swap this car's materials for transparent clones (materials may be shared between cars)
@@ -480,6 +584,19 @@ function carVisuals(race, S, car, dt) {
     }
   }
 
+  if (a.id === 'magnet' && (act || fx.magnet)) {
+    const M = fx.magnet || magnetMeshes(S, fx), on = act === 'magnet', tg = on ? a.target : null;
+    M.shoe.visible = on;
+    M.lines.forEach(l => { l.visible = !!tg; });
+    if (on) {
+      const pulse = 0.5 + 0.5 * Math.sin(t * 14);
+      M.shoe.scale.setScalar((a.t < 0.25 ? Math.max(0.01, easeOutBack(a.t / 0.25)) : 1) * (1 + 0.08 * pulse));
+      M.shoe.rotation.y = Math.sin(t * 3) * 0.25;
+      M.shoeMats[0].opacity = 0.55 + 0.45 * pulse; M.shoeMats[1].opacity = 1 - 0.45 * pulse;
+    }
+    if (tg?.pos) magnetLines(S, M, car, fx, tg, t, dt, vx, vz);
+  }
+
   if (car.spin > 0 && Math.random() < dt * 25) {   // dizzy sparkles
     const th = t * 9 + rnd(-0.3, 0.3);
     world(_w.set(Math.cos(th) * 0.9, fx.box.max.y + 0.5, Math.sin(th) * 0.9));
@@ -488,20 +605,27 @@ function carVisuals(race, S, car, dt) {
 }
 
 // ---------- effects ----------
-function applyOwn(car, a) {
-  const m = car.mods;
+function applyOwn(race, car, a) {
+  const m = car.mods, tg = a.id === 'magnet' ? a.target : null, gap = tg ? magnetGap(race, car, tg) : 0;
+  if (tg && (tg.finished || tg._?.left || gap <= MAGNET_CATCH)) {
+    a.active = 0;   // caught up (or overtook / target gone): the pull ends
+    return;
+  }
   if (!m) return;
-  if (a.id === 'boost' || a.id === 'nitro') { m.speedMul += a.power; m.accelMul += a.power; }
+  // dock behind the target instead of ramming it at +45%: no pull while closing in faster than it could brake off by then
+  if (tg && car.speed > Math.max(0, tg.speed || 0) + Math.sqrt(2 * MAGNET_DOCK * (gap - MAGNET_CATCH))) return;
+  if (a.id === 'boost' || a.id === 'nitro' || a.id === 'magnet') { m.speedMul += a.power; m.accelMul += a.power; }
   else if (a.id === 'shield') m.invulnerable = true;
   else if (a.id === 'phase') { m.noCollide = true; m.noOffroadPenalty = true; m.speedMul += a.power; }
   else if (a.id === 'thunderbolt') { m.speedMul += THUNDER_BOOST; m.accelMul += THUNDER_BOOST; }   // a.power = victim's spin
+  else if (a.id === 'domain') { m.speedMul += DOMAIN_BOOST; m.accelMul += DOMAIN_BOOST; }        // a.power = slow inside the dome
 }
 
 function endFx(S, car) {
   const a = car.ability, p = _w.set(car.pos.x, car.pos.y + 0.8, car.pos.z);
   if (a.id === 'shield') burst(S.glow, p, 40, PAL.shield, 8, 0.5, 0.45, 0.05);
   else if (a.id === 'phase') { setPhase(car, false); burst(S.glow, p, 30, PAL.phase, 5, 0.6, 0.4, 0.05); }
-  else if (a.id === 'thunderbolt') burst(S.glow, p, 30, PAL.thunderbolt, 6, 0.5, 0.4, 0.05);
+  else if (a.id === 'thunderbolt' || a.id === 'magnet' || a.id === 'domain') burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
   else burst(S.smoke, p, 10, PAL.smoke, 2, 0.8, 0.5, 1.4, -0.5, 1.5, 0.25);
 }
 
@@ -640,6 +764,26 @@ function thunderTarget(race, car) {
   return best;
 }
 
+// ---------- magnet ----------
+// m along the track. A net car is drawn and collided ~0.1 s behind its last reported progress (and that is rounded):
+// measure where it is drawn instead
+function drawnProgress(tr, c) {
+  if (c.control !== 'net' || !tr?.nearest) return c.progress;
+  const t = tr.nearest(c.pos, c.trackIndex).t;
+  return c.progress + ((((t - c.progress) % 1) + 1.5) % 1) - 0.5;
+}
+const magnetGap = (race, car, o) => (drawnProgress(race.track, o) - drawnProgress(race.track, car)) * (race.track?.length || 0);
+// closest car ahead still racing, farther than the catch distance (one already that close is no use) and within range
+function magnetTarget(race, car) {
+  let best = null, bg = MAGNET_RANGE;
+  for (const c of race.cars) {
+    if (c === car || c.finished || c._?.left) continue;
+    const g = magnetGap(race, car, c);
+    if (g > MAGNET_CATCH && g <= bg) { bg = g; best = c; }
+  }
+  return best;
+}
+
 // midpoint displacement; the upper levels fork off thinner side branches. out = [[a, b, width], ...]
 function jag(a, b, d, n, w, out, fork) {
   if (n === 0) { out.push([a, b, w]); return out; }
@@ -655,8 +799,14 @@ function jag(a, b, d, n, w, out, fork) {
 
 // two crossed ribbons per segment: reads from any side without per-view billboarding
 const _X = new THREE.Vector3(1, 0, 0), _Y = new THREE.Vector3(0, 1, 0);
-function ribbons(segs) {
-  const P = new Float32Array(segs.length * 36), U = new Float32Array(segs.length * 24);
+// g: rewrite an existing geometry in place (same segment count every call)
+function ribbons(segs, g = new THREE.BufferGeometry()) {
+  let P = g.attributes.position?.array, U = g.attributes.uv?.array;
+  if (P?.length !== segs.length * 36) {
+    P = new Float32Array(segs.length * 36); U = new Float32Array(segs.length * 24);
+    g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(U, 2));
+  }
   const d = new THREE.Vector3(), s1 = new THREE.Vector3(), s2 = new THREE.Vector3();
   let i = 0, j = 0;
   for (const [a, b, w] of segs) {
@@ -670,9 +820,7 @@ function ribbons(segs) {
       }
     }
   }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(P, 3));
-  g.setAttribute('uv', new THREE.BufferAttribute(U, 2));
+  g.attributes.position.needsUpdate = g.attributes.uv.needsUpdate = true;
   return g;
 }
 
@@ -681,18 +829,22 @@ const boltMat = (S, color) => new THREE.MeshBasicMaterial({
   side: THREE.DoubleSide, fog: false, toneMapped: false,
 });
 
-// thunder: whole-viewport flash for a local victim (bottom half in split screen for P2)
-function screenFlash(race, car) {
+// whole-viewport flash for a local player (bottom half in split screen for P2): thunder victim by default
+const THUNDER_SCREEN = ['radial-gradient(ellipse at 50% 20%, rgba(255,255,255,0.9), rgba(160,215,255,0.6) 50%, rgba(60,110,255,0.45) 100%)',
+  [{ opacity: 1 }, { opacity: 0.1, offset: 0.2 }, { opacity: 0.85, offset: 0.35 }, { opacity: 0 }], 450];
+const DOMAIN_SCREEN = ['radial-gradient(ellipse at center, rgba(215,160,255,0.55), rgba(90,20,170,0.6) 55%, rgba(20,0,40,0.9) 100%)',
+  [{ opacity: 0 }, { opacity: 1, offset: 0.15 }, { opacity: 0.6, offset: 0.5 }, { opacity: 0 }], 900];
+function screenFlash(race, car, [bg, frames, ms] = THUNDER_SCREEN) {
   if (typeof document === 'undefined') return;
   const split = race.mode === 'split', el = document.createElement('div');
   Object.assign(el.style, {
     position: 'fixed', left: '0', width: '100%', pointerEvents: 'none', zIndex: '5',
     top: split && car.control === 'p2' ? '50%' : '0', height: split ? '50%' : '100%',
-    background: 'radial-gradient(ellipse at 50% 20%, rgba(255,255,255,0.9), rgba(160,215,255,0.6) 50%, rgba(60,110,255,0.45) 100%)',
+    background: bg,
   });
   (document.getElementById('game') || document.body).appendChild(el);
-  el.animate?.([{ opacity: 1 }, { opacity: 0.1, offset: 0.2 }, { opacity: 0.85, offset: 0.35 }, { opacity: 0 }], { duration: 450, fill: 'forwards' });
-  setTimeout(() => el.remove(), 460);
+  el.animate?.(frames, { duration: ms, fill: 'forwards' });
+  setTimeout(() => el.remove(), ms + 10);
 }
 
 // bolt from the sky onto the target (follows it for its 0.4 s), spark burst; spin unless shielded.
@@ -722,7 +874,78 @@ function strike(race, S, target, pow) {
   if (isHuman(target)) { flash(race, who(race, target) + '⚡ 落雷!', '#8fd8ff'); screenFlash(race, target); }
 }
 
-// shared by local activation and remote messages; car may be null (unknown remote pid). target: thunderbolt victim or null
+// ---------- domain ----------
+// a dome of DOMAIN_R m that follows its owner (a remote owner's interpolated car; a static pose when the owner is unknown).
+// The slow / seal itself is applied in updateAbilities, to this client's own cars only.
+function spawnDomain(race, S, owner, at, dur, pow) {
+  const g = new THREE.Group(), center = at.clone();
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(COLOR.domain) }, uTime: { value: 0 }, uOpacity: { value: 0 } },
+    vertexShader: SHIELD_VERT, fragmentShader: DOMAIN_FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const dome = new THREE.Mesh(S.geo.dome ||= new THREE.SphereGeometry(1, 48, 20, 0, Math.PI * 2, 0, Math.PI / 2), mat);
+  dome.renderOrder = 18;
+  const runes = [0.2, 0.35].map(y => {
+    const m = new THREE.Mesh(S.geo.plane, new THREE.MeshBasicMaterial({
+      map: tex(S, 'rune'), color: '#9b3dff', transparent: true, depthWrite: false,   // normal blend: additive washes out to white on bright ground
+      fog: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+    }));
+    m.position.y = y;
+    m.renderOrder = 17;
+    return m;
+  });
+  g.add(dome, ...runes);
+  g.position.copy(center);
+  S.root.add(g);
+  const c = _w.copy(center).setY(center.y + 0.4);
+  ring(S, c, COLOR.domain, { r0: 2, r1: DOMAIN_R, life: 0.9, opacity: 0.9 });
+  ring(S, c, '#f3e0ff', { r0: 1, r1: DOMAIN_R * 0.6, life: 0.6, opacity: 0.6 });
+  glowBall(S, c.setY(center.y + 1.5), 9, 0.5, '#d9a6ff');
+  burst(S.glow, c, 90, PAL.domain, 18, 0.9, 0.8, 0.05, -2, 1.5, 1, 4);
+  const tr = race.track, tan = new THREE.Vector3(), left = new THREE.Vector3(), up = new THREE.Vector3(), basis = new THREE.Matrix4();
+  let hint;
+  race.hazards.push({
+    kind: 'domain', owner, power: pow, center, life: dur, age: 0, on: true,
+    update(dt) {
+      this.age += dt;
+      if (owner?._?.left) this.life = Math.min(this.life, this.age);   // owner quit (online)
+      this.on = this.age < this.life;
+      if (owner?.pos) center.copy(owner.pos);
+      if (tr?.nearest) {   // lie on the road like the oil slick: tilt to the grade across the dome (chord over ~0.7 R each way)
+        const N = tr.samples.length, i = hint = tr.nearest(center, hint).index, s = Math.round(DOMAIN_R * 0.7 / tr.length * N);
+        tan.subVectors(tr.samples[(i + s) % N].pos, tr.samples[(i - s + N) % N].pos).normalize();
+        left.set(tan.z, 0, -tan.x).normalize();
+        g.quaternion.setFromRotationMatrix(basis.makeBasis(left, up.crossVectors(tan, left), tan));
+      }
+      const k = this.on ? Math.max(0.01, easeOutBack(Math.min(1, this.age / 0.7))) : 1 - (this.age - this.life) / 0.5;   // grow in, collapse out
+      if (k <= 0) return false;
+      const blink = this.on && this.life - this.age < 1 && Math.sin(S.time * 30) < -0.3 ? 0.55 : 1;   // about to expire
+      g.position.copy(center);
+      dome.scale.setScalar(DOMAIN_R * k);
+      runes[0].scale.setScalar(DOMAIN_R * k);
+      runes[1].scale.setScalar(DOMAIN_R * 0.55 * k);
+      runes[0].rotation.y += dt * 0.12;
+      runes[1].rotation.y -= dt * 0.3;
+      const o = Math.min(1, this.age * 3) * Math.min(1, k) * blink;
+      mat.uniforms.uTime.value = S.time;
+      mat.uniforms.uOpacity.value = o;
+      runes[0].material.opacity = o * (0.75 + 0.25 * Math.sin(S.time * 3));
+      runes[1].material.opacity = o * 0.8;
+      if (this.on) {
+        for (let n = Math.floor(90 * dt + Math.random()); n > 0; n--) {   // motes drifting up inside the dome
+          const r = Math.sqrt(Math.random()) * DOMAIN_R * k * 0.95, th = rnd(0, Math.PI * 2);
+          const p = _w.set(Math.cos(th) * r, rnd(0, 2), Math.sin(th) * r).applyQuaternion(g.quaternion).add(center);
+          S.glow.emit(p.x, p.y, p.z, rnd(-0.3, 0.3), rnd(2, 4), rnd(-0.3, 0.3), pick(PAL.domain), rnd(1.8, 2.8), 1.1, 0.3, -0.6, 0.2, 0.9);
+        }
+      }
+      return true;
+    },
+    dispose() { g.removeFromParent(); mat.dispose(); runes.forEach(m => m.material.dispose()); },
+  });
+}
+
+// shared by local activation and remote messages; car may be null (unknown remote pid).
+// target: thunderbolt victim / magnet target or null
 function start(race, car, id, dur, pow, pose, target = null) {
   const S = st(race), at = new THREE.Vector3(pose.x, pose.y, pose.z);
   if (id === 'warp') {
@@ -736,6 +959,7 @@ function start(race, car, id, dur, pow, pose, target = null) {
     warpFx(S, at, d.pos, pose.h, d.heading);
     return;
   }
+  if (id === 'domain') spawnDomain(race, S, car, at, dur, pow);
   if (id === 'oil') spawnOil(race, S, pose, dur, pow, car);
   else if (id === 'timeslow') {
     race.hazards.push({ kind: 'timeslow', owner: car, power: pow, left: dur, update(dt) { return (this.left -= dt) > 0; }, dispose() {} });
@@ -747,6 +971,7 @@ function start(race, car, id, dur, pow, pose, target = null) {
     a.active = a.activeMax = dur;
     a.power = pow;
     a.t = 0;
+    a.target = id === 'magnet' ? target : null;
   }
   if (id === 'thunderbolt') strike(race, S, target, pow);
   const c = PAL[id];
@@ -754,25 +979,27 @@ function start(race, car, id, dur, pow, pose, target = null) {
   if (id !== 'timeslow') ring(S, _w.copy(at).setY(at.y + 0.15), COLOR[id], { r0: 1.5, r1: 6, life: 0.4, opacity: 0.8 });
 }
 
-// ---------- tint overlay for slowed local players ----------
+// ---------- tint overlays for local players: slowed (timeslow) / caught in a domain ----------
+const TINTS = [
+  ['slowVis', 'radial-gradient(ellipse at center, rgba(150,70,255,0.07) 35%, rgba(110,30,220,0.55) 100%)'],
+  ['domVis', 'radial-gradient(ellipse at center, rgba(60,10,110,0.22) 25%, rgba(35,0,70,0.62) 70%, rgba(15,0,30,0.88) 100%)'],
+];
 function updateTint(race, S) {
   if (typeof document === 'undefined') return;
-  const split = race.mode === 'split';
   for (const car of race.cars) {
     if (!isHuman(car) || !car.ability) continue;
-    const v = Math.round(car.ability.slowVis * 100) / 100;
-    let el = S.tint[car.control];
-    if (!el) {
-      if (!v) continue;
-      el = S.tint[car.control] = document.createElement('div');
-      Object.assign(el.style, {
-        position: 'fixed', left: '0', width: '100%', pointerEvents: 'none', zIndex: '4', opacity: '0',
-        top: split && car.control === 'p2' ? '50%' : '0', height: split ? '50%' : '100%',
-        background: 'radial-gradient(ellipse at center, rgba(150,70,255,0.07) 35%, rgba(110,30,220,0.55) 100%)',
-      });
-      (document.getElementById('game') || document.body).appendChild(el);
+    for (const [key, bg] of TINTS) {
+      const v = Math.round((car.ability[key] || 0) * 100) / 100;
+      let el = S.tint[car.control + key];
+      if (!el) {
+        const layer = race.hud?.layer?.(car);   // this car's viewport, under its HUD
+        if (!v || !layer) continue;
+        el = S.tint[car.control + key] = document.createElement('div');
+        Object.assign(el.style, { position: 'absolute', inset: '0', pointerEvents: 'none', opacity: '0', background: bg });
+        layer.appendChild(el);
+      }
+      if (el.__v !== v) { el.__v = v; el.style.opacity = String(v); }
     }
-    if (el.__v !== v) { el.__v = v; el.style.opacity = String(v); }
   }
 }
 
@@ -781,7 +1008,7 @@ export function initAbility(race, car) {
   const id = ABILITIES[car.stats?.ability] ? car.stats.ability : (ABILITIES[car.def?.ability] ? car.def.ability : 'boost');
   car.ability = {
     id, name: ABILITIES[id].name, gauge: 0, active: 0, activeMax: 0, power: 0, t: 0,
-    slow: 0, slowVis: 0, hit: 0, fx: null, phaseSwap: null,
+    slow: 0, slowVis: 0, hit: 0, fx: null, phaseSwap: null, target: null, sealed: false, domVis: 0,
   };
   car.spin ??= 0;
   return car.ability;
@@ -796,10 +1023,10 @@ export function updateAbilities(race, dt) {
     if (car.spin > 0) car.spin = Math.max(0, car.spin - dt);
     if (a.active > 0) {
       a.t += dt;
-      applyOwn(car, a);
+      applyOwn(race, car, a);
       a.active = Math.max(0, a.active - dt);
       if (!a.active) endFx(S, car);
-    } else if (running && !car.finished && car.control !== 'net' && a.gauge < 1) {
+    } else if (running && !car.finished && car.control !== 'net' && a.gauge < 1 && !a.sealed) {
       const drift = car.stats?.driftCharge && car.drifting ? 1 + DRIFT_CHARGE : 1;
       a.gauge = Math.min(1, a.gauge + dt * (car.stats?.gaugeRate || 1) / ABILITIES[a.id].fill * drift);
       if (a.gauge >= 1 && isHuman(car)) {   // ready pulse
@@ -816,6 +1043,29 @@ export function updateAbilities(race, dt) {
     if (car.mods?.invulnerable) p = 0;
     car.ability.slow = p;
     if (p && car.mods) car.mods.speedMul *= Math.max(0, 1 - p);
+  }
+
+  // domain: other cars inside a live dome are slowed and sealed (gauge frozen, can't activate); shield ignores it.
+  // Only this client's own cars: a remote car's own client applies it there.
+  for (const car of race.cars) {
+    const a = car.ability;
+    let p = 0;
+    if (car.control !== 'net' && !car.finished && !car.mods?.invulnerable) {
+      for (const hz of race.hazards) {
+        if (hz.kind === 'domain' && hz.on && hz.owner !== car && car.pos.distanceToSquared(hz.center) < DOMAIN_R * DOMAIN_R) p = Math.max(p, Math.min(DOMAIN_MAX_SLOW, hz.power));
+      }
+    }
+    if (p) {
+      if (!a.sealed && isHuman(car) && S.time - (a.caughtAt ?? -9) > 2) flash(race, who(race, car) + '結界に囚われた！', COLOR.domain);
+      a.caughtAt = S.time;
+      if (car.mods) car.mods.speedMul *= 1 - p;
+      if (Math.random() < dt * 14) {   // violet motes rising off the caught car
+        S.glow.emit(car.pos.x + rnd(-1, 1), car.pos.y + rnd(0.5, 1.5), car.pos.z + rnd(-1, 1), car.vel?.x || 0, rnd(1.5, 3), car.vel?.z || 0, pick(PAL.domain), rnd(0.6, 1), 0.5, 0.1, 0, 0.5);
+      }
+    }
+    a.sealed = p > 0;
+    a.domVis += ((a.sealed ? 1 : 0) - a.domVis) * Math.min(1, dt * 5);
+    if (a.domVis < 0.005) a.domVis = 0;
   }
 
   let j = 0;
@@ -846,14 +1096,20 @@ export function updateAbilities(race, dt) {
 export function tryActivate(race, car) {
   const a = car.ability || initAbility(race, car);
   if (a.gauge < 1 || a.active > 0 || race.state !== 'running' || car.finished || car.control === 'net') return false;
+  if (a.sealed) {   // inside someone's domain
+    if (isHuman(car)) flash(race, who(race, car) + '封印中!', COLOR.domain);
+    return false;
+  }
   const def = ABILITIES[a.id];
-  const dur = def.duration * (car.stats?.abilityDuration || 1), pow = def.power * (car.stats?.abilityPower || 1);
+  let dur = def.duration * (car.stats?.abilityDuration || 1), pow = def.power * (car.stats?.abilityPower || 1);
   const pose = { x: car.pos.x, y: car.pos.y, z: car.pos.z, h: car.heading };
   a.gauge = 0;
   // before start(): in split screen a thunderbolt victim's '落雷!' must be the flash that stays
   if (isHuman(car)) flash(race, who(race, car) + def.name + '!', COLOR[a.id]);
   else if (a.id === 'timeslow' && slowedHumans(race)) flash(race, `${car.name}の${def.name}!`, COLOR.timeslow);
-  const target = a.id === 'thunderbolt' ? thunderTarget(race, car) : null;
+  const target = a.id === 'thunderbolt' ? thunderTarget(race, car) : a.id === 'magnet' ? magnetTarget(race, car) : null;
+  if (a.id === 'magnet' && !target) ({ dur, pow } = MAGNET_LEAD);   // leading: short weak boost
+  if (a.id === 'domain' && isHuman(car)) screenFlash(race, car, DOMAIN_SCREEN);
   start(race, car, a.id, dur, pow, pose, target);
   if (race.net && car.control === 'p1') {
     race.net.send({ t: 'ability', pid: race.localPid, id: a.id, x: r2(pose.x), y: r2(pose.y), z: r2(pose.z), h: r2(pose.h), dur: r2(dur), pow: r2(pow), ...(target?.pid != null && { tp: String(target.pid) }) });
@@ -873,7 +1129,7 @@ export function applyRemoteAbility(race, msg) {
   const dur = clamp(num(msg.dur, def.duration * (car?.stats?.abilityDuration || 1)), 0, def.duration * 2);
   const pow = clamp(num(msg.pow, def.power * (car?.stats?.abilityPower || 1)), 0, def.power * 2);
   const pose = { x: num(msg.x, car?.pos.x ?? 0), y: num(msg.y, car?.pos.y ?? 0), z: num(msg.z, car?.pos.z ?? 0), h: num(msg.h, car?.heading ?? 0) };
-  const target = msg.id === 'thunderbolt' && msg.tp != null ? race.cars.find(c => c.pid != null && String(c.pid) === String(msg.tp)) || null : null;
+  const target = msg.tp != null ? race.cars.find(c => c.pid != null && String(c.pid) === String(msg.tp)) || null : null;
   start(race, car, msg.id, dur, pow, pose, target);
   if (msg.id === 'timeslow' && slowedHumans(race)) flash(race, `${car ? car.name + 'の' : ''}${def.name}!`, COLOR.timeslow);
 }
@@ -885,8 +1141,10 @@ export function clearAbilities(race) {
     const a = car.ability;
     if (!a) continue;
     setPhase(car, false);
-    if (a.fx) { a.fx.group.removeFromParent(); a.fx.mats.forEach(m => m.dispose()); a.fx.aura?.geometry.dispose(); a.fx = null; }
-    a.active = a.slow = a.slowVis = 0;
+    if (a.fx) { a.fx.group.removeFromParent(); a.fx.mats.forEach(m => m.dispose()); a.fx.aura?.geometry.dispose(); a.fx.geos?.forEach(g => g.dispose()); a.fx = null; }
+    a.active = a.slow = a.slowVis = a.domVis = 0;
+    a.sealed = false;
+    a.target = null;
   }
   const S = STATE.get(race);
   if (!S) return;

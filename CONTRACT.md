@@ -80,6 +80,7 @@ race = {
   mode, cars: [Car], track, net /* session or null */, localPid,
   hazards: [],                  // owned by abilities.js (oil slicks etc.); abilities.js adds/removes meshes to scene itself
   hud: { flash(text, color) }   // game shows a big center message ~1s (for "ワープ!" etc.), on all viewports
+       // + layer(car) -> that car's viewport element under its HUD (full-screen tints go there), or undefined
 }
 track = {
   curve /* THREE.CatmullRomCurve3, closed */, length /* m */, width,
@@ -123,6 +124,7 @@ export function clearAbilities(race)             // remove hazard meshes
 Effects (numbers from ABILITIES; duration×stats.abilityDuration, power×stats.abilityPower):
 boost/nitro: speedMul & accelMul += power. oil: slick decal+mesh ~4 m behind the car, lives `duration` s; any other car touching it (radius 3 m) spins `power` s. shield: invulnerable (ignores collision slowdown, oil, timeslow). warp: move car forward `power` m along track center (keep lateral offset clamped inside road, set heading to tangent, keep speed), flash + particle burst. timeslow: all other cars get speedMul ×(1−power) for duration (shield ignores); only the activator is unaffected. phase: noCollide, noOffroadPenalty, speedMul += power, and make its mesh semi-transparent while active.
 Show visual feedback for active effects (e.g. glow/flame for nitro, bubble for shield).
+thunderbolt / magnet carry the target's pid as `tp` in the ability message. magnet: nearest car ahead by progress (>8 m, ≤150 m) → speedMul & accelMul += power until ≤8 m behind it (none ahead: +0.15 for 1 s). domain: 45 m dome following the owner; other cars inside get speedMul ×(1−min(power,0.6)) and `ability.sealed` (gauge frozen, tryActivate refuses), shield immune; each client applies it only to its own cars; owner +0.2 speed/accel.
 
 ## ghost.js
 ```js

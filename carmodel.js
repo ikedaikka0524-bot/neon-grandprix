@@ -844,6 +844,27 @@ const BUILDERS = {
   },
 };
 
+// accents for cars that share a body style with another car
+const ACCENTS = {
+  sr_magnet(s, m) {   // horseshoe magnet standing on the roof: red / blue poles
+    const red = new THREE.MeshStandardMaterial({ color: 0xe0282e, emissive: 0x800008, roughness: 0.35, metalness: 0.3 });
+    const blue = new THREE.MeshStandardMaterial({ color: 0x2a5bff, emissive: 0x001a90, roughness: 0.35, metalness: 0.3 });
+    const arc = new THREE.TorusGeometry(0.3, 0.09, 8, 12, Math.PI / 2);
+    add(s, arc, red, 0, 1.32, -1.35);
+    add(s, arc, blue, 0, 1.32, -1.35).rotation.z = Math.PI / 2;
+    add(s, box(0.18, 0.26, 0.18), red, 0.3, 1.19, -1.35);
+    add(s, box(0.18, 0.26, 0.18), blue, -0.3, 1.19, -1.35);
+    pair(s, box(0.19, 0.08, 0.19), m.chrome, 0.3, 1.04, -1.35);
+    add(s, box(0.02, 0.05, 3.6), red, 1.025, 0.52, 0);
+    add(s, box(0.02, 0.05, 3.6), blue, -1.025, 0.52, 0);
+  },
+  ur_domain(s, m) {   // violet glow parts, a floating halo over the dome and rune strips on the flanks
+    m.glow.color.set(0xd9a6ff); m.glow.emissive.set(0x8a2cff);
+    add(s, new THREE.TorusGeometry(0.85, 0.03, 8, 40).rotateX(Math.PI / 2), m.glow, 0, 1.95, -0.6);
+    pair(s, box(0.02, 0.06, 2.8), m.glow, 1.06, 0.62, 0);
+  },
+};
+
 function procedural(def, look) {
   const m = makeMats(def, look);
   const g = new THREE.Group();
@@ -851,6 +872,7 @@ function procedural(def, look) {
   g.userData.steer = [];
   const s = new THREE.Group();
   const info = (BUILDERS[def.body] || BUILDERS.sedan)(g, s, m, def) || {};
+  ACCENTS[def.id]?.(s, m);
   if (look.wing && info.wing) addWing(s, m, info.wing[0], info.wing[1], info.wingW || 1.6);
   g.add(mergeStatic(s));
   return g;
