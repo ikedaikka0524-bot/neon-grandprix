@@ -855,9 +855,11 @@ function stepCar(ctx, car, dt) {
     else vF = Math.max(-14, vF - acc * 0.6 * brk * dt);
   }
   if (thr === 0 && brk === 0) vF -= Math.sign(vF) * Math.min(Math.abs(vF), (1.4 + 0.025 * Math.abs(vF)) * dt);
-  if (vF > top) vF = Math.max(top, vF - (vF - top) * (off ? 2.4 : 1.3) * dt - 2 * dt);
+  const vCap = m.towV > 0 ? Math.max(top, m.towV) : top;   // a hellchain reel may pull past the car's own top speed
+  if (vF > vCap) vF = Math.max(vCap, vF - (vF - vCap) * (off ? 2.4 : 1.3) * dt - 2 * dt);
   if (spinning) vF *= Math.exp(-0.9 * dt);
   if (m.tow > 0 && vF < m.towV) vF = Math.min(m.towV, vF + m.tow * dt);
+  if (m.towV > 0 && vF > m.towV) vF -= (vF - m.towV) * 3.5 * dt;   // chain tension: the reel speed eases the owner in, no ramming
 
   // lateral grip; part of the scrubbed sideways speed is turned forward, never adding energy
   const k = spinning ? 1.2 : c.drift ? 2.5 + 6 * grip : 30 * grip;

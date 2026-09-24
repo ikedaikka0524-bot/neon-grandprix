@@ -15,7 +15,8 @@ const ROBOT_T = 0.35, ROBOT_BOOST = 1.5;   // robotdash: transform time each way
 const KNOCK = { side: 12, spin: 0.4, keep: 0.7, again: 0.6 };   // robot hit: sideways m/s, spin s, speed kept, s before the same car again
 // hellchain (m, s): pick a car ahead within range, snap when this close; tow spring point behind it, one lane beside it;
 // chain flight time; max slow on the target; tow spring 1/s^2 and its cap (x power) m/s^2
-const HELL = { range: 80, snap: 6, follow: 7, lane: 3, hook: 0.2, maxDrag: 0.6, k: 1.5, pull: 60 };
+// reel: extra closing speed over the target = min(reelMax, reel * (gap - follow)) x power/0.4 — the chain winds the owner in
+const HELL = { range: 80, snap: 6, follow: 7, lane: 3, hook: 0.2, maxDrag: 0.6, k: 4, pull: 150, reel: 1.0, reelMax: 45 };
 const HELL_SLING = { dur: 1.5, pow: 0.45 }, HELL_MISS = { dur: 1, pow: 0.15 };   // after the snap / nobody ahead or a shrugged-off chain
 const LINKS = 240, LINK_PITCH = 0.36, CHAIN_SEG = 24;
 const CURB_CURV = 1 / 130, CURB_SPAN = 14;   // world.js lays curbs where |curv| exceeds this within ± this many samples
@@ -1225,8 +1226,10 @@ function chainTow(race, car, a) {
   // the corner speed it wants (full throttle)
   const align = Math.max(0, Math.sin(car.heading) * own.tan.x + Math.cos(car.heading) * own.tan.z);
   const want = car.spin > 0 || car.offroad ? 0 : car.control === 'cpu' ? +(inp.throttle >= 1) : 1 - inp.brake;
-  m.tow = Math.min(HELL.k * Math.max(0, gap - HELL.follow), HELL.pull * a.power) * align * want;
-  m.towV = Math.max(0, tg.speed || 0) * (1 + 0.25 * a.power);
+  const slack = Math.max(0, gap - HELL.follow), pw = a.power / 0.4;   // pw = 1 at base power
+  m.tow = Math.min(HELL.k * slack, HELL.pull * a.power) * align * want;
+  // the chain reels the owner in: faster the farther away, easing off near the follow point
+  m.towV = Math.max(0, tg.speed || 0) + Math.min(HELL.reelMax * pw, HELL.reel * pw * slack);
   if (!isHuman(car)) return;   // a CPU keeps its own line (it pulls out beside a car it closes on anyway)
   // steering assist: aim at the road ahead (never past the target) one lane beside the target's line, inside the road.
   // game.js blends it into the player's own steer (a drift still needs the player's own hard steer)
