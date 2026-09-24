@@ -4,7 +4,7 @@ import { CARS, CAR_BY_ID, ABILITIES, SKILL_TREE, computeStats } from './data.js'
 import { TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
 import { buildCarMesh } from './carmodel.js';
 import { buildWorld } from './world.js';
-import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities, robotKnock } from './abilities.js';
+import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities, robotKnock, faceWall } from './abilities.js';
 import { createRecorder, createGhostPlayer } from './ghost.js';
 import { netSample, ageOf, predict, newOffset, applyOffset, retarget, decay } from './netpredict.js';
 
@@ -950,6 +950,7 @@ function collide(ctx) {
     }
     robotKnock(ctx.race, a, b);   // robotdash: the robot sends the other car flying
   }
+  faceWall(ctx.race);   // facewall: cars behind the wall of faces can't pass it
 }
 
 function impact(ctx, x, y, z, strength, cars) {

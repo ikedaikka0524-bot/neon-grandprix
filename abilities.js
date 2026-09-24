@@ -1112,6 +1112,131 @@ function spawnDomain(race, S, owner, at, dur, pow) {
   });
 }
 
+// ---------- facewall ----------
+// Copies of the owner's own mesh (shared geometry / materials) in a line across the road at the owner's spot on the track:
+// a pair every FACE.every s, FACE.gap m apart, out to the barriers, spinning and hopping. They ride along with the owner
+// (a remote owner's predicted car). The block itself is faceWall(), run by game.js; each client blocks only its own cars.
+const FACE = { gap: 4.5, every: 0.35, pop: 0.35, out: 0.5, half: 2.3, spin: 11, min: 4.4, push: 0.35, slower: 2, bounce: 3, again: 0.6 };
+COLOR.facewall = '#ffb37a';
+PAL.facewall = pal('#fff4e8', '#ffd2ad', '#ffb37a', '#ff8a5c');
+
+function facePuff(S, p) {
+  burst(S.smoke, _w.set(p.x, p.y + 1, p.z), 14, PAL.smoke, 4, 0.7, 0.8, 2.2, -0.5, 1.5, 0.45);
+  burst(S.glow, _w.set(p.x, p.y + 1.2, p.z), 16, PAL.facewall, 6, 0.4, 0.45, 0.05);
+}
+
+// Lateral of face slot k (±1, ±2 …) beside an owner at lateral ol: clamped to lim (= barrier − FACE.half) so the outer
+// faces pile up against the barrier and reach it; null = not shown (the slot before it is already at the barrier).
+function faceLat(ol, k, lim) {
+  const u = ol + k * FACE.gap;
+  return Math.sign(k) * u - FACE.gap >= lim ? null : clamp(u, -lim, lim);
+}
+// the lateral edge (sg = 1 right, -1 left) of the shown faces, the owner itself counting as one: faceWall blocks up to it
+function faceEdge(ol, pairs, lim, sg) {
+  let e = ol;
+  for (let k = 1, l; k <= pairs && (l = faceLat(ol, sg * k, lim)) != null; k++) e = l;
+  return e + sg * FACE.half;
+}
+// a remote owner silent for 1 s (hidden tab, lost link) is frozen on screen: like game.js collide() (NET_STALE), its
+// wall doesn't block and its faces fade out until its states come back
+const faceStale = o => o.control === 'net' && performance.now() / 1000 - (o._?.net?.t ?? -Infinity) >= 1;
+// forward (x, z) of the row's spot: the curve's own tangent there, so the row turns smoothly through a corner instead of
+// swinging a few tenths of a radian each time the owner passes a track sample
+function faceFwd(tr, n) {
+  const t = tr.tangentAt(n.t), l = Math.hypot(t.x, t.z) || 1;
+  return [t.x / l, t.z / l];
+}
+
+function spawnFaceWall(race, S, owner, dur) {
+  const tr = race.track;
+  if (!owner.mesh || !tr?.nearest) return;
+  const proto = new THREE.Group();
+  for (const c of owner.mesh.children) if (!c.userData.abilFx && !c.isLight) proto.add(c.clone());   // not its fx / headlight
+  const wall = tr.wall ?? tr.width / 2 + 9.4, lim = wall - FACE.half, pairs = Math.ceil(2 * wall / FACE.gap), faces = [];
+  let hint = owner.trackIndex;
+  race.hazards.push({
+    kind: 'facewall', owner, on: true, age: 0, life: dur, pairs: 0, lim,
+    update(dt) {
+      this.age += dt;
+      if (owner._?.left) this.life = Math.min(this.life, this.age);   // owner quit (online)
+      const was = this.on;
+      this.on = this.age < this.life;
+      while (this.on && faces.length < pairs * 2 && this.age >= faces.length / 2 * FACE.every) {
+        const k = faces.length / 2 + 1;
+        for (const sg of [1, -1]) {
+          const o = proto.clone();
+          S.root.add(o);
+          faces.push({ o, k: sg * k, born: this.age, ph: rnd(0, Math.PI * 2), vis: null, puff: false });
+        }
+      }
+      this.pairs = faces.length / 2;
+      // placed where the owner will be after this frame's physics / net prediction (they run after the hazards), so the
+      // row lines up with the drawn car and with faceWall()'s hold instead of trailing it by speed × dt
+      const stale = faceStale(owner), at = stale ? owner.pos : _v.copy(owner.pos).addScaledVector(owner.vel, dt);
+      const n = tr.nearest(at, hint), [fx, fz] = faceFwd(tr, n), h0 = Math.atan2(fx, fz), ax = at.x, az = at.z;
+      hint = n.index;
+      const end = this.on ? 0 : (this.age - this.life) / FACE.out;
+      if (end >= 1) return false;
+      for (const f of faces) {
+        const t = this.age - f.born, lat = faceLat(n.lateral, f.k, lim), inside = lat != null && !stale;
+        f.vis = f.vis == null ? +inside : f.vis + (+inside - f.vis) * Math.min(1, dt * 8);
+        const sc = (t < FACE.pop ? easeOutBack(t / FACE.pop) : 1) * f.vis * (1 - end * end);
+        f.o.visible = sc > 0.01;
+        if (!f.o.visible) continue;
+        f.o.scale.setScalar(sc);
+        if (lat != null) f.o.position.set(ax - fz * (lat - n.lateral), n.point.y + 0.3 * Math.abs(Math.sin(t * 7 + f.ph)), az + fx * (lat - n.lateral));
+        f.o.rotation.set(0, h0 + f.ph + t * FACE.spin + end * end * 25, Math.sin(t * 9 + f.ph) * 0.12);
+        if ((!f.puff && inside) || (was && !this.on)) { f.puff = true; facePuff(S, f.o.position); }
+      }
+      return true;
+    },
+    dispose() { for (const f of faces) f.o.removeFromParent(); },   // geometry / materials are the owner's
+  });
+}
+
+// CPU: raise the wall when a car is close behind (no use otherwise)
+function faceWanted(race, car) {
+  return race.cars.some(c => {
+    const gap = (car.progress - c.progress) * (race.track?.length || 0);
+    return c !== car && !c.finished && !c._?.left && gap > 3 && gap < 30;
+  });
+}
+
+// game.js, after car-car collisions (every physics substep): this client's own cars just behind a live wall and inside
+// the shown faces' edges are held FACE.min m behind the row, no faster than the row − FACE.slower, with a bounce on
+// contact. Cars ahead of the owner and shielded / phased / robot cars are free; a warp jumps past.
+export function faceWall(race) {
+  const tr = race.track;
+  for (const hz of race.hazards || []) {
+    if (hz.kind !== 'facewall' || !hz.on || !tr?.nearest || faceStale(hz.owner)) continue;
+    const o = hz.owner, on = tr.nearest(o.pos, o.trackIndex), [fx, fz] = faceFwd(tr, on), curv = tr.samples[on.index].curv;
+    const lo = faceEdge(on.lateral, hz.pairs, hz.lim, -1), hi = faceEdge(on.lateral, hz.pairs, hz.lim, 1);
+    for (const c of race.cars) {
+      if (c === o || c.control === 'net' || c.finished || c._?.left || c.mods?.invulnerable || c.mods?.noCollide) continue;
+      const n = tr.nearest(c.pos, c.trackIndex);
+      if (n.lateral < lo || n.lateral > hi) continue;
+      // the faces stand on a straight line across the road through the owner: measure (and push) square to that line,
+      // not along the centreline, which in a corner is far shorter on the inside than on the outside
+      const behind = (((on.t - n.t) % 1 + 1.5) % 1 - 0.5) * tr.length;   // m behind the owner along the track
+      const gap = (o.pos.x - c.pos.x) * fx + (o.pos.z - c.pos.z) * fz;
+      if (behind < 0 || behind > 15 || gap < 0 || gap >= FACE.min) continue;
+      const push = Math.min(FACE.min - gap, FACE.push);
+      c.pos.x -= fx * push; c.pos.z -= fz * push;
+      // the row turns with the owner: at the car's offset from it, it moves at speed × (1 + curv × offset)
+      const cap = Math.max(0, (o.speed || 0) * Math.max(0.3, 1 + curv * (n.lateral - on.lateral)) - FACE.slower);
+      const vt = c.vel.x * fx + c.vel.z * fz;
+      if (vt <= cap) continue;
+      const S = st(race), a = c.ability || initAbility(race, c), hit = S.time - (a.faceAt ?? -9) > FACE.again;
+      const dv = vt - cap + (hit ? FACE.bounce : 0);
+      c.vel.x -= fx * dv; c.vel.z -= fz * dv;
+      if (!hit) continue;
+      if (isHuman(c) && S.time - (a.faceAt ?? -9) > 1.5) flash(race, who(race, c) + '顔にブロックされた!', COLOR.facewall);
+      a.faceAt = S.time;
+      burst(S.glow, _w.set(c.pos.x + fx * 2, c.pos.y + 1, c.pos.z + fz * 2), 18, PAL.facewall, 6, 0.35, 0.4, 0.05);
+    }
+  }
+}
+
 // shared by local activation and remote messages; car may be null (unknown remote pid).
 // target: thunderbolt victim / magnet target or null
 function start(race, car, id, dur, pow, pose, target = null) {
@@ -1128,6 +1253,7 @@ function start(race, car, id, dur, pow, pose, target = null) {
     return;
   }
   if (id === 'domain') spawnDomain(race, S, car, at, dur, pow);
+  if (id === 'facewall' && car) spawnFaceWall(race, S, car, dur);
   if (id === 'oil') spawnOil(race, S, pose, dur, pow, car);
   else if (id === 'timeslow') {
     race.hazards.push({ kind: 'timeslow', owner: car, power: pow, left: dur, update(dt) { return (this.left -= dt) > 0; }, dispose() {} });
@@ -1239,6 +1365,7 @@ export function updateAbilities(race, dt) {
         burst(S.glow, _w.setY(car.pos.y + 1), 20, PAL[a.id] === PAL.oil ? PAL.spark : PAL[a.id], 4, 0.5, 0.4, 0.05, 0, 2, 1, 2);
       }
     }
+    if (a.id === 'facewall' && car.control === 'cpu') car.input.ability = a.gauge >= 1 && !(a.active > 0) && faceWanted(race, car);
   }
 
   // timeslow: strongest field not owned by the car; shield ignores it
