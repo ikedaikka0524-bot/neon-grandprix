@@ -847,6 +847,30 @@ const BUILDERS = {
     wheels4(g, m, { fz: 1.35, rz: -1.35, r: 0.34, w: 0.26, track: 1.0 });
     return { wing: [-1.6, 1.3], wingW: 1.7 };
   },
+
+  // ur_megaface fallback (keyed by car id): a big egg-shaped cartoon head, face at the front, on four spoked wheels
+  ur_megaface(g, s, m) {
+    Object.assign(m.body, { metalness: 0.05, roughness: 0.55, clearcoat: 0.25 });   // skin, not paint
+    const hair = new THREE.MeshStandardMaterial({ color: 0x2b1c12, roughness: 0.9 });
+    const lip = new THREE.MeshStandardMaterial({ color: 0x5a1414, roughness: 0.6 });
+    const R = [1.15, 1.25, 2.0], C = [0, 1.6, 0];
+    const on = (x, y, z, out = 0) => {   // point on the head surface along direction (x, y, z), pushed out by `out`
+      const l = Math.hypot(x, y, z);
+      return [C[0] + x / l * (R[0] + out), C[1] + y / l * (R[1] + out), C[2] + z / l * (R[2] + out)];
+    };
+    add(s, new THREE.SphereGeometry(1, 40, 28), m.body, ...C).scale.set(...R);
+    add(s, new THREE.SphereGeometry(1, 40, 14, 0, Math.PI * 2, 0, 1.05).rotateX(-0.6), hair, ...C).scale.set(R[0] * 1.03, R[1] * 1.03, R[2] * 1.02);
+    for (const k of [1, -1]) {
+      add(s, new THREE.SphereGeometry(0.3, 20, 14), m.white, ...on(k * 0.34, 0.26, 0.9, -0.08)).scale.set(1, 0.8, 0.5);
+      add(s, new THREE.SphereGeometry(0.13, 14, 10), m.black, ...on(k * 0.33, 0.25, 0.9, 0.04)).scale.set(1, 1, 0.5);
+      add(s, box(0.42, 0.07, 0.12), hair, ...on(k * 0.36, 0.5, 0.8, 0.02)).rotation.z = k * 0.18;   // brows
+      add(s, new THREE.SphereGeometry(0.32, 16, 12), m.body, ...on(k, 0.1, 0.12)).scale.set(0.35, 1, 0.7);   // ears
+    }
+    add(s, new THREE.SphereGeometry(0.24, 16, 12), m.body, ...on(0, 0.02, 1, 0.05)).scale.set(0.8, 1, 1.1);   // nose
+    add(s, new THREE.TorusGeometry(0.38, 0.06, 8, 24, Math.PI), lip, ...on(0, -0.36, 0.93, -0.02)).rotation.z = Math.PI;   // grin
+    wheels4(g, m, { fz: 1.3, rz: -1.3, r: 0.42, w: 0.3, track: 1.02 });
+    return { wing: [-1.6, 2.3] };
+  },
 };
 
 // accents for cars that share a body style with another car
@@ -898,7 +922,7 @@ function procedural(def, look) {
   g.userData.wheels = [];
   g.userData.steer = [];
   const s = new THREE.Group();
-  const info = (BUILDERS[def.body] || BUILDERS.sedan)(g, s, m, def) || {};
+  const info = (BUILDERS[def.id] || BUILDERS[def.body] || BUILDERS.sedan)(g, s, m, def) || {};
   ACCENTS[def.id]?.(s, m);
   if (look.wing && info.wing) addWing(s, m, info.wing[0], info.wing[1], info.wingW || 1.6);
   g.add(mergeStatic(s));

@@ -25,6 +25,7 @@ export const ABILITIES = {
   downforce: { name: 'ダウンフォース', desc: '5秒間グリップ最大。コーナーでも減速せずレールの上のように曲がれる', fill: 20, duration: 5, power: 1 },   // power = steering at speed +25% x power
   robotdash: { name: 'ロボット・ダッシュ', desc: 'ロボットに変形！5秒間ぶつかった車を弾き飛ばし、状態異常を受けない。車に戻る瞬間に大加速', fill: 22, duration: 5, power: 0.5 }, // duration = robot time, power = speed/accel bonus for 1.5 s after
   hellchain: { name: 'ヘルチェーン', desc: '150m先まで届く炎の鎖で前の車を捕まえ、5秒間引き寄せる。外れる瞬間に相手を振り回してスピンさせ、一気に追い抜く', fill: 18, duration: 5, power: 0.5 }, // duration = chain s, power = target slow (max 0.6) / tow up to target speed +25% x power
+  facewall: { name: 'フェイス・ウォール', desc: '左右に顔がどんどん増えて横一列に並び、回転しながら道をふさぐ。後ろの車は前に出られない', fill: 24, duration: 5, power: 1 }, // duration = wall time; power unused
 };
 
 // Passive traits (R cars).
@@ -58,6 +59,7 @@ export const CARS = [
   { id: 'ur_graphite', name: 'グラファイト・GT', rarity: 'UR', body: 'sports', color: '#3a3d42', ability: 'downforce', passive: null, base: { top: 72, accel: 21, grip: 0.90, steer: 2.3, mass: 1.1 } },
   { id: 'ur_changer', name: 'レトロ・チェンジャー', rarity: 'UR', body: 'kei', color: '#efe6cf', ability: 'robotdash', passive: null, base: { top: 67, accel: 20, grip: 0.88, steer: 2.3, mass: 1.6 } },
   { id: 'ur_inferno', name: 'インフェルノ・キャット', rarity: 'UR', body: 'muscle', color: '#d9151b', ability: 'hellchain', passive: null, base: { top: 73, accel: 23, grip: 0.84, steer: 2.0, mass: 1.6 } },
+  { id: 'ur_megaface', name: 'メガフェイス', rarity: 'UR', body: 'kei', color: '#b9744f', ability: 'facewall', passive: null, base: { top: 68, accel: 20, grip: 0.86, steer: 2.1, mass: 1.5 } },
 ];
 for (const c of CARS) c.modelRot ??= Math.PI / 2;   // models/*.glb are authored nose toward -X
 export const CAR_BY_ID = Object.fromEntries(CARS.map(c => [c.id, c]));
