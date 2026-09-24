@@ -89,6 +89,7 @@ ok(['constructor', 'constructor_x', '__proto__', 'hasOwnProperty'].every(c => ra
 // keeps Chromium / WebKit (which inflate a whole input chunk at once) from allocating it all before the cap check.
 const bomb = gzipSync(Buffer.alloc(150 * 2 ** 20)).toString('base64');
 ok(bomb.length <= 204800 && await checkGhost({ ...node, data: bomb }, T, time).then(() => false, e => e.message === 'ghost too big'), 'gzip bomb stops at the cap');
+ok(await checkGhost({ ...node, data: await packGhost({ frames: frames.map((f, i) => (i > 5 && i < 60 ? [20000 + i, f[1], 20100 + i, ...f.slice(3)] : f)) }) }, T, time).then(() => true, () => false), 'ghost check accepts a tokyodive run (pocket course at 20 km, 20 km)');
 await bad1('non-finite / huge coordinates', { ...node, data: await packGhost({ frames: frames.map((f, i) => (i === 5 ? [1e6, ...f.slice(1)] : f)) }) });
 
 console.log(bad ? `${bad} FAILED` : 'all passed');

@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ABILITIES } from './data.js';
 import { buildRobotMesh } from './carmodel.js';
-import { getDimension, makePortal, ORIGIN } from './tokyo-dimension.js';
+import { getDimension, makePortal, ORIGIN, RUN } from './tokyo-dimension.js';
 
 const OIL_RADIUS = 3, OIL_BEHIND = 4.2;
 const DRIFT_CHARGE = 1.2;   // extra gauge fill rate while drifting (stats.driftCharge)
@@ -58,8 +58,8 @@ const smooth01 = k => { k = clamp(k, 0, 1); return k * k * (3 - 2 * k); };
 const isHuman = c => c.control === 'p1' || c.control === 'p2';
 // robot form (incl. both transforms): immune, not slowed by hits, knocks others away
 const isRobot = c => c.ability?.id === 'robotdash' && c.ability.active > 0 && c.ability.t < c.ability.robotDur + ROBOT_T;
-// shield / phase / robot form shrug a hellchain off
-const chainProof = c => isRobot(c) || (c.ability?.active > 0 && (c.ability.id === 'shield' || c.ability.id === 'phase'));
+// shield / phase / robot form shrug a hellchain off; so does diving into tokyodive's own space (no whip / slow in there)
+const chainProof = c => isRobot(c) || away(c) || (c.ability?.active > 0 && (c.ability.id === 'shield' || c.ability.id === 'phase'));
 // tokyodive: off in its own space (a remote diver is just hidden here) - nothing can target or slow it meanwhile
 const away = c => !!c?.ability?.away;
 const flash = (race, text, color) => race.hud?.flash?.(text, color);
@@ -1274,7 +1274,7 @@ function chainTow(race, car, a) {
 function chainRelease(race, car, a, sling) {
   const S = st(race), tg = a.target, b = sling ? HELL_SLING : HELL_MISS;
   if (tg?.pos) chainSnapFx(S, car, tg);
-  if (tg && !sling && tg.control !== 'net') {
+  if (tg && !sling && tg.control !== 'net' && !away(tg)) {
     if (tg.ability) tg.ability.hit = 1;
     if (isHuman(tg)) flash(race, who(race, tg) + 'ガード!', COLOR.shield);
   }
@@ -1468,11 +1468,17 @@ function start(race, car, id, dur, pow, pose, target = null) {
 // ---------- tokyodive ----------
 // A gate opens ahead, the car drives in (DIVE.lead s) and is away: a local driver races the pocket course
 // (tokyo-dimension.js, car._.track), a CPU is parked out of the world. It comes back along the track, from where it went
-// in, by power x (duration x top speed x DIVE.base + the farthest it got in there x DIVE.inside) - a CPU as if it drove
-// DIVE.cpuIn m/s in there. Net ~+3 s over just driving on; the pocket laps add a skill bonus. A remote diver is only hidden
-// here: its own client runs the dive and sends { out: 1 } with where it came back.
-const DIVE = { lead: 0.3, minSpeed: 15, base: 0.8, inside: 0.6, cpuIn: 45, remoteSlack: 1.5, near: 25 };
-const diveGain = (car, d, t, inside) => d.pow * (t * (car.stats?.top || 60) * DIVE.base + inside * DIVE.inside);
+// in, by top speed x DIVE.base x the ability's own 6 s (pays for the time away; reaching the exit early keeps all of it,
+// so a quick pocket run is the skill bonus) + power x the farthest it got in there x DIVE.inside. Net ~+3 s over just
+// driving on. Power and a longer window (node a2) touch only the pocket part: power on the whole jump, and base paid for
+// 7.2 s, netted ~2.3x stock with every node. A CPU drives it like a clean run: DIVE.cpuIn m/s, back at the exit (RUN).
+// A remote diver is only hidden here: its own client runs the dive and sends { out: 1 } with where it came back.
+// cpuIn is per real second (the pocket's clock runs 1.25x): 54 = ~302 m in 5.6 s, a clean pocket run
+const DIVE = { lead: 0.3, minSpeed: 15, base: 0.8, inside: 0.6, cpuIn: 54, remoteSlack: 1.5, near: 25 };
+const DIVE_T = ABILITIES.tokyodive.duration;
+const diveGain = (car, d, t, inside) => Math.min(t, DIVE_T) * (car.stats?.top || 60) * DIVE.base + d.pow * inside * DIVE.inside;
+// the finish counts where it lands: a flag closer than a clean dive's time away (at this race's pace) comes sooner by driving
+const diveLate = (race, car) => car.progress > 0.2 && (race.track?.laps - car.progress) * race.time / car.progress < DIVE.lead + RUN / DIVE.cpuIn;
 const DIVE_SCREEN = ['radial-gradient(ellipse at center, rgba(255,255,255,0.95), rgba(255,140,40,0.75) 40%, rgba(255,40,160,0.7) 75%, rgba(25,10,40,0.9) 100%)',
   [{ opacity: 0 }, { opacity: 1, offset: 0.25 }, { opacity: 0 }], 520];
 
@@ -1494,6 +1500,8 @@ function diveGate(S, p, h, life, out = false) {
 function place(car, pos, h) {
   car.pos.copy(pos);
   car.heading = h;
+  // a new heading along the road: the old yaw rate / drift (the garage helix, a corner here) must not carry over
+  if (car._) { car._.yaw = 0; car._.drift = false; }
   car.vel?.set(Math.sin(h), 0, Math.cos(h)).multiplyScalar(car.speed);
   if (car.mesh) { car.mesh.position.copy(pos); car.mesh.rotation.y = h; }
 }
@@ -1539,7 +1547,7 @@ function diveStep(race, S, car, dt) {
     diveHud(race, S, car, `異空間ダイブ　残り ${Math.max(0, d.dur - d.inT).toFixed(1)}秒　+${Math.round(diveGain(car, d, d.inT, d.maxS - d.s0))}m`);
     if (s >= D.exitS) { diveOut(race, S, car); return; }
   }
-  if (d.inT >= d.dur) diveOut(race, S, car);
+  if (d.inT >= (d.D ? d.dur : Math.min(d.dur, RUN / DIVE.cpuIn))) diveOut(race, S, car);
 }
 
 function diveIn(race, S, car) {
@@ -1572,9 +1580,11 @@ function diveIn(race, S, car) {
 function diveOut(race, S, car) {
   const a = car.ability, d = a.dive, tr = race.track, L = tr?.length || 1;
   const e = d.entry || { x: car.pos.x, y: car.pos.y, z: car.pos.z, h: car.heading, i: car.trackIndex };
-  const dist = clamp(diveGain(car, d, d.dur, d.D ? d.maxS - d.s0 : DIVE.cpuIn * d.dur) || 0, 0, L * 0.9);   // reaching the exit early still earns the full base
+  const inside = d.D ? d.maxS - d.s0 : Math.min(DIVE.cpuIn * d.inT, RUN);
+  const dist = clamp(diveGain(car, d, DIVE_T, inside) || 0, 0, L * 0.9);   // reaching the exit early still earns the full base
   const dest = warpDest(race, e, dist);
   if (!d.D) car.speed = d.speed0;
+  if (tr?.samples && dest.i != null) car.speed = landSpeed(tr, car, dest.i, car.speed);
   car._.track = null;
   car._.away = false;
   a.away = false;
@@ -1591,6 +1601,17 @@ function diveOut(race, S, car) {
     flash(race, `${who(race, car)}+${Math.round(dist)}m!`, COLOR.tokyodive);
   }
   sendOut(race, car, dest.pos, dest.heading);
+}
+
+// back on the track no faster than the corners just ahead allow (game.js aiInput's limit): a landing in a hairpin at
+// the speed it went in with (a CPU) or left the pocket at went straight into the wall. Landing inside the corner, the
+// car starts from zero yaw: 80 % of the limit there, or it runs wide while the steering builds up
+function landSpeed(tr, car, i, v) {
+  const S = tr.samples, N = S.length, lat = (car.stats?.grip || 0.85) * (tr.grip || 1) * 36 * 1.3;
+  for (let k = 0, d = 0; d < 150; k += 2, d = k * tr.spacing) {
+    v = Math.min(v, Math.sqrt(lat * (d < 15 ? 0.64 : 1) / (Math.abs(S[(i + k) % N].curv || 0) + 1e-4) + 36 * d));
+  }
+  return v;
 }
 
 function sendOut(race, car, p, h) {   // online: where the diver is back on the track
@@ -1808,6 +1829,10 @@ export function tryActivate(race, car) {
   if (a.gauge < 1 || a.active > 0 || race.state !== 'running' || car.finished || car.control === 'net') return false;
   if (a.sealed) {   // inside someone's domain
     if (isHuman(car)) flash(race, who(race, car) + '封印中!', COLOR.domain);
+    return false;
+  }
+  if (a.id === 'tokyodive' && diveLate(race, car)) {   // keeps the gauge
+    if (isHuman(car)) flash(race, who(race, car) + 'ゴール目前!', COLOR.tokyodive);
     return false;
   }
   const def = ABILITIES[a.id];

@@ -19,6 +19,8 @@ const SEGS = [
   ['s', 28, 0, 'garage'], ['a', R_HELIX, -360, 'helix', LEVEL], ['s', 12, 0, 'exit'],   // garage straight: from the drum wall to the helix
 ];
 const GATE_S = 6, START_S = 9, BACK_S = 2;
+// start -> exit gate (build: exitS = L - 5): the whole run in there, known without building it (a CPU's dive)
+export const RUN = SEGS.reduce((s, [k, a, deg]) => s + (k === 's' ? a : Math.abs(deg) * Math.PI / 180 * a), 0) - 5 - START_S;
 const INDOOR = new Set(['garage', 'helix', 'exit']);
 const HOT = ['#ff7a1a', '#19f0e0', '#ff2f9e'];
 const MORE = ['#ffb13b', '#2fb8ff', '#ff5bd8', '#b45cff', '#ff3b3b', '#39ff9a', '#fff0c8', '#ffe14a'];

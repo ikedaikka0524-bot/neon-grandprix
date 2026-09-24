@@ -175,17 +175,19 @@ async function setup(ctx, root, opts, mode) {
   applyQuality(ctx);
   resize(ctx);
   // link every program now (parallel where the driver can) instead of one by one as the countdown camera swings round.
-  // auto: the other shadow setup (on <-> off) too, so a step mid-race is a program-cache hit, not a main-thread freeze
-  try {
-    renderer.compile(scene, ctx.views[0].camera);
-    if (ctx.auto) {
-      const q = ctx.q;
-      ctx.q = q === 'low' ? 'medium' : 'low'; applyQuality(ctx); renderer.compile(scene, ctx.views[0].camera);
-      ctx.q = q; applyQuality(ctx);
-    }
+  // auto: the other shadow setup (on <-> off) too, so a step mid-race is a program-cache hit, not a main-thread freeze.
+  // An ability's own course (tokyodive) does the same for its lighting, and uploads its textures: now, not mid-race
+  // (in both setups: a step to / from 'low' during a dive linked ~14 pocket programs mid-race)
+  const cam = ctx.views[0].camera, warm = () => {
+    try { renderer.compile(scene, cam); } catch (e) { console.warn(e); }
+    for (const f of race.warmups || []) try { f(ctx, cam); } catch (e) { console.warn(e); }
+  };
+  warm();
+  if (ctx.auto) try {
+    const q = ctx.q;
+    ctx.q = q === 'low' ? 'medium' : 'low'; applyQuality(ctx); warm();
+    ctx.q = q; applyQuality(ctx);
   } catch (e) { console.warn(e); }
-  // an ability's own course (tokyodive) does the same for its lighting, and uploads its textures: now, not mid-race
-  for (const f of race.warmups || []) try { f(ctx, ctx.views[0].camera); } catch (e) { console.warn(e); }
   loading.remove();
   ctx.last = performance.now();
   ctx.raf = requestAnimationFrame(t => frame(ctx, t));
@@ -717,7 +719,9 @@ function drawMap(ctx, v) {
   const gm = ctx.ghost?.mesh;
   if (gm) dot(gm.position.x, gm.position.z, 4.5, 'rgba(180,230,255,0.45)', 'rgba(255,255,255,0.6)');
   for (const car of ctx.race.cars) if (car !== v.car && !car._.left && !car._.away && car.mesh.visible) dot(car.pos.x, car.pos.z, 4.5, car.look.body, '#111');
-  dot(v.car.pos.x, v.car.pos.z, 6.5, v.car.look.body, '#fff');
+  // diving (tokyodive): the car is on its pocket course ~20 km off this map; its dot waits where it went in
+  const me = v.car._.away ? ctx.track.pointAt(v.car.progress) : v.car.pos;
+  dot(me.x, me.z, 6.5, v.car.look.body, '#fff');
 }
 
 function updateHud(ctx, v) {
@@ -737,8 +741,10 @@ function updateHud(ctx, v) {
     else { const gt = ctx.ghost.timeAtProgress(car.progress); if (gt != null) diff = race.time - gt; }
     if (diff != null) { gtxt = `ゴースト差 ${diff >= 0 ? '+' : '−'}${Math.abs(diff).toFixed(2)}秒`; gcol = diff > 0 ? '#ff7676' : '#5dffb0'; }
   }
-  setText(h.ghost, gtxt);
-  setStyle(h.ghost, 'color', gcol);
+  if (!c.away) {   // diving (tokyodive): progress is frozen in there, so the diff would just count; keep the last one
+    setText(h.ghost, gtxt);
+    setStyle(h.ghost, 'color', gcol);
+  }
   const kmh = Math.round(Math.abs(car.speed) * 3.6);
   setText(h.kmh, String(kmh));
   setStyle(h.arc, 'strokeDashoffset', String(Math.round(100 - Math.min(1, kmh / 320) * 100)));
@@ -1088,14 +1094,18 @@ function impact(ctx, x, y, z, strength, cars) {
 // ======================================================================================
 function updateProgress(ctx, car) {
   const c = car._, t = c.t;
-  if (c.away) return;   // off in an ability's own space: frozen until it comes back
+  if (c.away) { c.awayAt ??= ctx.race.time; return; }   // off in an ability's own space: frozen until it comes back
+  const t0 = c.awayAt ?? ctx.race.time;
+  c.awayAt = null;
   if (c.prevT == null) c.prevT = t;
-  let crossed = false;
+  let crossed = false, at = ctx.race.time;
   if (c.jump) {   // came back far ahead: count the half-way marks and the finish line it skipped over
     const end = c.prevT + c.jump;
     for (let m = Math.floor(c.prevT * 2 + 1) / 2; m <= end; m += 0.5) {
       if (m % 1) c.halfway = true;
-      else if (c.halfway) { c.crossings++; c.halfway = false; crossed = true; }
+      // the lap splits where it passed the line, as if it drove the skipped stretch at an even pace: from the landing,
+      // a dive over the line started the next lap up to 0.9 laps in (a 5 s "best lap", which the leaderboard rules reject)
+      else if (c.halfway) { c.crossings++; c.halfway = false; crossed = true; at = t0 + (ctx.race.time - t0) * (m - c.prevT) / c.jump; }
     }
     c.jump = 0;
     c.prevT = wrap01(end);   // where it landed: the check below still sees a line crossed by this frame's own move
@@ -1106,14 +1116,14 @@ function updateProgress(ctx, car) {
   if (t > 0.4 && t < 0.6) c.halfway = true;
   c.prevT = t;
   car.progress = c.crossings - 1 + t;
-  if (crossed) lapCross(ctx, car);   // after progress: finishCar's ghost sample must see the finish-line progress
+  if (crossed) lapCross(ctx, car, at);   // after progress: finishCar's ghost sample must see the finish-line progress
 }
 
-function lapCross(ctx, car) {
+function lapCross(ctx, car, at) {
   const c = car._, race = ctx.race, done = c.crossings - 1, laps = race.track.laps;
   if (done < 1 || done <= car.lap || car.finished) return;
-  const lt = race.time - c.lapStart;
-  c.lapStart = race.time;
+  const lt = at - c.lapStart;
+  c.lapStart = at;
   c.lastLap = lt;
   car.lap = done;
   const newBest = car.bestLap == null || lt < car.bestLap;
@@ -1162,7 +1172,7 @@ function localPlacements(ctx) {
     if (time == null && ctx.mode === 'solo' && car.control === 'cpu' && car.progress > 0.05 && race.time > 0) {
       time = race.time + Math.max(0, race.track.laps - car.progress) * (race.time / car.progress);
     }
-    return { car, name: car.name, carId: car.carId, time: time == null ? null : r2(time), isLocal: isLocal(car), control: car.control };
+    return { car, name: car.name, carId: car.carId, time: time == null ? null : r3(time), isLocal: isLocal(car), control: car.control };
   });
   return list.sort((a, b) => (a.time ?? Infinity) - (b.time ?? Infinity));
 }
@@ -1184,7 +1194,7 @@ function finalize(ctx, placements) {
       const i = placements.findIndex(p => p.car === car);
       // ghost mode races the ghost: 1st only when it was beaten (else every time trial would pay the win prize)
       const place = beatGhost != null ? (beatGhost ? 1 : 2) : i < 0 ? placements.length : i + 1;
-      return { control: car.control, carId: car.carId, place, time: car.finished ? r2(car.finishTime) : null, bestLap: car.bestLap == null ? null : r2(car.bestLap) };
+      return { control: car.control, carId: car.carId, place, time: car.finished ? r3(car.finishTime) : null, bestLap: car.bestLap == null ? null : r2(car.bestLap) };
     }),
     ghostRecording: (ctx.mode === 'solo' || ctx.mode === 'ghost') && p1?.finished ? (ctx.ghostRec || null) : null,
     beatGhost,
@@ -1244,7 +1254,7 @@ function hookNet(ctx) {
       const car = byPid.get(String(p.pid));
       if (!car || seen.has(car)) continue;
       seen.add(car);
-      list.push({ car, name: car.name, carId: car.carId, time: p.time == null ? null : r2(p.time), isLocal: car.control === 'p1', control: car.control });
+      list.push({ car, name: car.name, carId: car.carId, time: p.time == null ? null : r3(p.time), isLocal: car.control === 'p1', control: car.control });
     }
     for (const car of race.cars) if (!seen.has(car)) list.push({ car, name: car.name, carId: car.carId, time: null, isLocal: car.control === 'p1', control: car.control });
     finalize(ctx, list);

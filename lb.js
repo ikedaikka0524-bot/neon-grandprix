@@ -122,7 +122,8 @@ export async function checkGhost(g, tid, time) {
   if (!def || !g || typeof g.data !== 'string' || !g.data.length || g.data.length > GHOST_MAX || g.trackId !== tid
     || !okTime(g.time, minTimes(tid).race) || Math.abs(g.time - time) > 0.01 || !rarityOf(g.carId)) throw new Error('bad ghost');
   const F = await unpackGhost(g.data), last = F[F.length - 1];
-  const sane = f => f.every(Number.isFinite) && Math.abs(f[0]) < 2e4 && Math.abs(f[1]) < 2e3 && Math.abs(f[2]) < 2e4 && f[4] > -1.5 && f[4] < def.laps + 1;
+  // x / z up to 30 km: a tokyodive run records its pocket course (tokyo-dimension.js ORIGIN = 20 km, 20 km)
+  const sane = f => f.every(Number.isFinite) && Math.abs(f[0]) < 3e4 && Math.abs(f[1]) < 2e3 && Math.abs(f[2]) < 3e4 && f[4] > -1.5 && f[4] < def.laps + 1;
   if (F.length < 20 || Math.abs((F.length - 1) * DT - g.time) > 1 || last[4] < def.laps - 0.05 || !F.every(sane)) throw new Error('bad ghost');
   return { v: 1, trackId: tid, carId: g.carId, look: cleanLook(g.look, g.carId), time: g.time, dt: DT, frames: F };
 }
@@ -177,6 +178,9 @@ const writeQ = q => { mem = q; ls.set(QKEY, JSON.stringify(q)) || ls.set(QKEY, J
 // run = { trackId, carId, race, lap, ghost: ghostData } from a finished time attack
 export async function lbQueue(run) {
   if (!lbReady() || !TRACK_BY_ID[run.trackId] || !rarityOf(run.carId) || !okTime(run.race, 0) || !okTime(run.lap, 0)) return;
+  // a lap under the rules' floor fails the whole update, race time and ghost too (lbFlush then drops the run): send the
+  // run's average lap instead, an upper bound of its best lap that is never under the floor when the race time isn't
+  if (run.lap < minTimes(run.trackId).lap) run = { ...run, lap: Math.ceil(run.race / TRACK_BY_ID[run.trackId].laps * 1000) / 1000 };
   let ghost = null;
   try {
     const data = await packGhost(run.ghost);

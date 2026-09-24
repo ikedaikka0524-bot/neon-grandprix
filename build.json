@@ -1,11 +1,13 @@
 {
-  "build": "20260924192252",
+  "build": "20260924205803",
   "files": [
     "abilities.js",
     "carmodel.js",
     "data.js",
+    "firebase-config.js",
     "game.js",
     "ghost.js",
+    "lb.js",
     "net.js",
     "netpredict.js",
     "p2p.js",
@@ -32,6 +34,7 @@
     "theme-city.js",
     "theme-desert.js",
     "theme-snow.js",
+    "tokyo-dimension.js",
     "tracks.js",
     "ui.js",
     "version.js",

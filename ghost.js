@@ -7,6 +7,11 @@ const r4 = v => Math.round(v * 1e4) / 1e4;   // progress: 2 decimals = 13 m step
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 const cr = (p0, p1, p2, p3, t) =>   // uniform Catmull-Rom
   0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (3 * p1 - p0 - 3 * p2 + p3) * t * t * t);
+// frames further apart than this are a teleport (warp, tokyodive's pocket course 20 km out), never driving (≤ ~5 m):
+// the spline must not bend through it (it swung the ghost ~2 km off the road around a dive)
+const JUMP = 30;
+const far = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) > JUMP;
+const mirror = (a, b) => a.map((v, k) => 2 * v - b[k]);
 
 export function createRecorder(car, trackId) {
   const frames = [];
@@ -52,7 +57,10 @@ function ghostTrack(ghostData) {
       const n = F.length;
       if (!n) return null;
       const x = Math.max(0, time / dt), i = Math.min(Math.floor(x), n - 1), t = i < n - 1 ? x - i : 0;
-      const f0 = F[Math.max(0, i - 1)], f1 = F[i], f2 = F[Math.min(n - 1, i + 1)], f3 = F[Math.min(n - 1, i + 2)];
+      let f0 = F[Math.max(0, i - 1)], f1 = F[i], f2 = F[Math.min(n - 1, i + 1)], f3 = F[Math.min(n - 1, i + 2)];
+      if (far(f1, f2)) return f1.slice(0, 4);   // hold, then snap on the next frame
+      if (far(f0, f1)) f0 = mirror(f1, f2);
+      if (far(f2, f3)) f3 = mirror(f2, f1);
       const h1 = f1[3], h0 = h1 + wrap(f0[3] - h1), h2 = h1 + wrap(f2[3] - h1), h3 = h2 + wrap(f3[3] - f2[3]);
       return [cr(f0[0], f1[0], f2[0], f3[0], t), cr(f0[1], f1[1], f2[1], f3[1], t), cr(f0[2], f1[2], f2[2], f3[2], t), cr(h0, h1, h2, h3, t)];
     },
@@ -66,8 +74,11 @@ function ghostTrack(ghostData) {
         if (P[mid] >= progress) hi = mid; else lo = mid + 1;
       }
       if (!lo) return 0;
-      const a = P[lo - 1], b = P[lo];
-      return (lo - 1 + (b > a ? (progress - a) / (b - a) : 1)) * dt;
+      // spread a plateau over the step after it: a tokyodive (progress frozen away, then a jump far ahead) reads as the
+      // ghost moving through the skipped stretch, not as a sudden −6 s at its gate
+      let a = lo - 1;
+      while (a > 0 && P[a - 1] === P[lo - 1]) a--;
+      return (a + (progress - P[a]) / (P[lo] - P[a]) * (lo - a)) * dt;
     },
   };
 }
