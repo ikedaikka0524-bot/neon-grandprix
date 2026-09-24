@@ -34,6 +34,19 @@ const KEYSETS = {
 };
 const GAME_KEYS = new Set(['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'Enter', 'NumpadEnter', 'Tab']);
 
+// Graphics quality ('high' = the original look). Lower levels trade pixels, shadows, scenery density, effects and view
+// distance for frame rate. 'auto' starts from a device guess, steps down on slow measured frames (at most once back up).
+const QUALITY = {
+  high: { pr: 2, shadow: 2048, inst: 1, fx: 1, far: 1 },
+  medium: { pr: 1.25, shadow: 1024, inst: 0.6, fx: 0.6, far: 0.8 },
+  low: { pr: 1, shadow: 0, inst: 0.35, fx: 0.3, far: 0.6 },
+};
+const LEVELS = ['low', 'medium', 'high'], LEVEL_JA = { high: '高', medium: '中', low: '低' };
+// 'auto' steps on a ladder: 0 = 'low' at pixel ratio 0.7, 1 = low, 2 = medium, 3 = high. Page session: the level the
+// previous race settled at, the lowest step still worth going to, the highest step that held.
+let autoLevel = null, autoMin = 0, autoMax = 3;
+const guessLevel = () => ((navigator.hardwareConcurrency || 4) >= 8 && !matchMedia('(pointer: coarse)').matches ? 'high' : 'medium');
+
 let R = null;   // active race context
 
 // ======================================================================================
@@ -67,10 +80,11 @@ async function setup(ctx, root, opts, mode) {
   root.appendChild(wrap);
   const loading = el(wrap, 'div', 'rg-loading', `<div class="rg-spin"></div>${esc(def.name)} を準備中…`);
 
-  const renderer = ctx.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  ctx.auto = !QUALITY[opts.quality];
+  ctx.q = ctx.auto ? (autoLevel ??= guessLevel()) : opts.quality;
+  // antialias is fixed per context: decided here (pixel ratio, shadows etc. follow the level live, see applyQuality)
+  const renderer = ctx.renderer = new THREE.WebGLRenderer({ antialias: ctx.q !== 'low', powerPreference: 'high-performance' });
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;   // every level: only shadows on/off changes the lit shaders
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -98,7 +112,7 @@ async function setup(ctx, root, opts, mode) {
   if (R !== ctx) return;
   race.cars = list.map((e, i) => makeCar(i, e, meshes[i]));
   if (ctx.env.night) for (const car of race.cars) carLights(ctx, car);
-  for (const car of race.cars) scene.add(car.mesh);
+  for (const car of race.cars) { blobShadow(ctx, car); scene.add(car.mesh); }
   // a ghost from another course would drive through the scenery (pre-v2 ghosts are from the original circuit)
   ctx.ghostData = opts.ghost && (opts.ghost.trackId ?? DEFAULT_TRACK) === def.id ? opts.ghost : null;
   const g0 = mode === 'ghost' && ctx.ghostData?.frames?.[0];
@@ -152,9 +166,18 @@ async function setup(ctx, root, opts, mode) {
   listen(ctx, document, 'visibilitychange', () => {
     if (document.hidden) { ctx.audio?.ac.suspend().catch(() => {}); netReady(ctx); } else ctx.audio?.resume();
   });
+  applyQuality(ctx);
   resize(ctx);
-  // link every program now (parallel where the driver can) instead of one by one as the countdown camera swings round
-  try { renderer.compile(scene, ctx.views[0].camera); } catch (e) { console.warn(e); }
+  // link every program now (parallel where the driver can) instead of one by one as the countdown camera swings round.
+  // auto: the other shadow setup (on <-> off) too, so a step mid-race is a program-cache hit, not a main-thread freeze
+  try {
+    renderer.compile(scene, ctx.views[0].camera);
+    if (ctx.auto) {
+      const q = ctx.q;
+      ctx.q = q === 'low' ? 'medium' : 'low'; applyQuality(ctx); renderer.compile(scene, ctx.views[0].camera);
+      ctx.q = q; applyQuality(ctx);
+    }
+  } catch (e) { console.warn(e); }
   loading.remove();
   ctx.last = performance.now();
   ctx.raf = requestAnimationFrame(t => frame(ctx, t));
@@ -288,6 +311,79 @@ function carLights(ctx, car) {
   car.mesh.add(spot, spot.target);
 }
 
+// soft dark quad under the car, shown only while real shadows are off (quality 'low')
+function blobShadow(ctx, car) {
+  if (!ctx.blobMat) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 4, 32, 32, 32);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    ctx.blobMat = new THREE.MeshBasicMaterial({ color: 0x000000, alphaMap: new THREE.CanvasTexture(c), transparent: true, opacity: 0.6, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    ctx.blobGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+  }
+  const size = new THREE.Box3().setFromObject(car.mesh).getSize(new THREE.Vector3());
+  const m = car.blob = new THREE.Mesh(ctx.blobGeo, ctx.blobMat);
+  m.scale.set(size.x * 1.3, 1, size.z * 1.15);
+  m.position.y = 0.05;
+  m.visible = false;
+  car.mesh.add(m);
+}
+
+function applyQuality(ctx) {
+  const Q = QUALITY[ctx.q], r = ctx.renderer, sun = ctx.sun, dpr = window.devicePixelRatio || 1, sh = Q.shadow > 0;
+  let pr = Math.min(dpr, Q.pr);
+  if (ctx.q === 'low' && dpr >= 2 && window.innerWidth >= 1400) pr = 0.8;
+  if (ctx.views.length > 1 && ctx.q !== 'high') pr = Math.min(pr, 1);   // split screen draws everything twice
+  if (ctx.prCut) pr = Math.min(pr, 0.7);                                // auto: still slow at 'low'
+  r.setPixelRatio(ctx.race.pixelRatio = pr);   // race.pixelRatio: abilities.js sizes its point sprites with it
+  // together: the sun's castShadow is in three's lights hash, so every lit material picks its program for the new
+  // shadow setup by itself (a cache hit after setup's prewarm; unlit ones never sample shadows and keep theirs)
+  r.shadowMap.enabled = sun.castShadow = sh;
+  if (sh && sun.shadow.mapSize.x !== Q.shadow) { sun.shadow.mapSize.set(Q.shadow, Q.shadow); sun.shadow.map?.dispose(); sun.shadow.map = null; }
+  for (const car of ctx.race.cars) if (car.blob) car.blob.visible = !sh;
+  for (const p of ctx.fx) p.keep = Q.fx;
+  ctx.skids.limit(Q.fx);
+  ctx.worldFx?.setQuality?.({ level: ctx.q, inst: Q.inst, far: Q.far });
+}
+
+// auto: median of real frame intervals (rAF timestamps) per window: 2 s during the countdown (the first step lands
+// before GO), else 3 s. Ignores the first 1 s, 1 s after each change and gaps > 250 ms (tab switches).
+// > 20 ms: one step down. Still slow at the bottom: the steps bought no frames (30 Hz rAF cap in iOS Low Power Mode /
+// Chrome Energy Saver, or CPU-bound), so back to the highest step that was as fast, and no lower this page session.
+// 5 windows < 11 ms (> 60 Hz screens): one step up, once per race; if that step turns out slow, it is the session's ceiling.
+function autoQuality(ctx, now) {
+  const a = ctx.aq ||= { t0: now - 1000, prev: now, iv: [], sum: 0, fast: 0, up: null, med: [] };
+  const d = now - a.prev;
+  a.prev = now;
+  if (now - a.t0 < 2000 || d > 250) return;
+  a.iv.push(d);
+  if ((a.sum += d) < (ctx.race.state === 'countdown' ? 2000 : 3000)) return;
+  const med = a.iv.sort((x, y) => x - y)[a.iv.length >> 1], s = ctx.prCut ? 0 : LEVELS.indexOf(ctx.q) + 1;
+  a.iv.length = 0; a.sum = 0;
+  a.med[s] = med;
+  let to = s;
+  if (med > 20) {
+    a.fast = 0;
+    if (a.up === s) autoMax = s - 1;
+    if (s > autoMin) to = s - 1;
+    else {
+      const best = Math.min(...a.med.filter(Boolean));
+      for (let k = 3; k > s; k--) if (a.med[k] <= best * 1.12) { to = autoMin = k; break; }
+    }
+  } else if (med < 11 && s < autoMax && !a.up) { if (++a.fast >= 5) a.up = to = s + 1; }
+  else a.fast = 0;
+  if (to === s) return;
+  const q = ctx.q;
+  ctx.q = autoLevel = LEVELS[Math.max(0, to - 1)];
+  ctx.prCut = to === 0;
+  applyQuality(ctx);
+  a.t0 = now - 1000;
+  if (ctx.q === q) return;
+  const e = el(ctx.wrap, 'div', 'rg-qtoast', `画質を自動調整: ${LEVEL_JA[ctx.q]}`);
+  ctx.timers.push(setTimeout(() => e.remove(), 2600));
+}
+
 function gridSlot(tr, slot) {
   const back = 9 + Math.floor(slot / 2) * 8.5 + (slot % 2) * 4;
   const idx = ((Math.round((1 - back / tr.length) * tr.N) % tr.N) + tr.N) % tr.N, s = tr.samples[idx];
@@ -378,7 +474,7 @@ function buildTrack(def) {
 // ======================================================================================
 class Particles {
   constructor(ctx, max, additive) {
-    this.max = max; this.i = 0;
+    this.max = max; this.i = 0; this.keep = 1; this.live = 0;
     this.pos = new Float32Array(max * 3); this.vel = new Float32Array(max * 3); this.col = new Float32Array(max * 4);
     this.size = new Float32Array(max); this.life = new Float32Array(max); this.maxLife = new Float32Array(max);
     this.s0 = new Float32Array(max); this.s1 = new Float32Array(max); this.a0 = new Float32Array(max);
@@ -402,14 +498,17 @@ class Particles {
     ctx.fx.push(this);
   }
   spawn(x, y, z, vx, vy, vz, life, s0, s1, r, g, b, a, grav = 0, drag = 0) {
+    if (this.keep < 1 && Math.random() > this.keep) return;   // quality: fewer particles
     const i = this.i; this.i = (i + 1) % this.max;
     this.pos.set([x, y, z], i * 3); this.vel.set([vx, vy, vz], i * 3); this.col.set([r, g, b, a], i * 4);
     this.life[i] = this.maxLife[i] = life; this.s0[i] = s0; this.s1[i] = s1; this.a0[i] = a; this.grav[i] = grav; this.drag[i] = drag;
     this.size[i] = s0;
   }
   update(dt) {
+    let live = 0;
     for (let i = 0; i < this.max; i++) {
       if (this.life[i] <= 0) { if (this.size[i]) this.size[i] = 0; continue; }
+      live++;
       this.life[i] -= dt;
       if (this.life[i] <= 0) { this.size[i] = 0; continue; }
       const k = 1 - this.life[i] / this.maxLife[i], j = i * 3, dr = Math.exp(-this.drag[i] * dt);
@@ -418,6 +517,8 @@ class Particles {
       this.size[i] = lerp(this.s0[i], this.s1[i], k);
       this.col[i * 4 + 3] = this.a0[i] * (1 - k) * Math.min(1, k * 8 + 0.3);
     }
+    if (!live && !this.live) return;   // nothing alive: skip the buffer upload
+    this.live = live;
     const a = this.points.geometry.attributes;
     a.position.needsUpdate = a.pcolor.needsUpdate = a.psize.needsUpdate = true;
   }
@@ -425,7 +526,7 @@ class Particles {
 
 class Skids {
   constructor(ctx, max) {
-    this.max = max; this.n = 0; this.i = 0; this.last = new Map();
+    this.max = this.lim = max; this.n = 0; this.i = 0; this.last = new Map();
     this.pos = new Float32Array(max * 12);
     const idx = new Uint32Array(max * 6);
     for (let q = 0; q < max; q++) idx.set([q * 4, q * 4 + 1, q * 4 + 2, q * 4, q * 4 + 2, q * 4 + 3], q * 6);
@@ -444,7 +545,7 @@ class Skids {
       const d2 = (prev[6] - x) ** 2 + (prev[8] - z) ** 2;
       if (d2 < 0.09) return;
       if (d2 < 16) {
-        const q = this.i; this.i = (q + 1) % this.max; this.n = Math.min(this.n + 1, this.max);
+        const q = this.i; this.i = (q + 1) % this.lim; this.n = Math.min(this.n + 1, this.lim);
         const w = 0.14;
         this.pos.set([prev[0], prev[1], prev[2], prev[3], prev[4], prev[5], x + rx * w, y, z + rz * w, x - rx * w, y, z - rz * w], q * 12);
         this.mesh.geometry.attributes.position.needsUpdate = true;
@@ -454,6 +555,12 @@ class Skids {
     this.last.set(key, [x - rx * 0.14, y, z - rz * 0.14, x + rx * 0.14, y, z + rz * 0.14, x, y, z]);
   }
   cut(key) { this.last.delete(key); }
+  limit(k) {   // quality: keep only the newest k share of the marks
+    this.lim = Math.max(1, Math.round(this.max * k));
+    if (this.i >= this.lim) this.i = 0;
+    this.n = Math.min(this.n, this.lim);
+    this.mesh.geometry.setDrawRange(0, this.n * 6);
+  }
 }
 
 function makeAudio() {
@@ -656,10 +763,10 @@ function updateLink(ctx) {
   let info = null;
   try { info = race.net.linkInfo?.() || null; } catch { /* older session: MQTT only */ }
   const rows = race.cars.filter(c => c.control === 'net' && !c._.left).map(car => {
-    const li = info?.[car.pid] || { p2p: false, lat: car._.net?.lat };
+    const li = info?.[car.pid] || { p2p: false, lat: null };   // net.js label: '直結 45ms' / '中継 (旧版) ~' ...
     const lat = Number.isFinite(li.lat) ? Math.round(li.lat) : null;
     const col = lat != null && lat > 250 ? '#ff7676' : li.p2p ? '#5dffb0' : '#ffd23f';
-    return `<div><i style="background:${esc(car.look.body)}"></i>${esc(car.name)} <b style="color:${col}">${li.p2p ? '直結' : '中継'}${lat != null ? ` ${lat}ms` : ''}</b></div>`;
+    return `<div><i style="background:${esc(car.look.body)}"></i>${esc(car.name)} <b style="color:${col}">${esc(li.label ?? `${li.p2p ? '直結' : '中継'} ${lat != null ? `${lat}ms` : '~'}`)}</b></div>`;
   });
   setHtml(ctx.linkEl, rows.join(''));
 }
@@ -1143,7 +1250,11 @@ function netPredict(ctx, car, nowS, dt) {
 function frame(ctx, now) {
   if (R !== ctx) return;
   ctx.raf = requestAnimationFrame(t => frame(ctx, t));
-  const raw = clamp((now - ctx.last) / 1000, 0, 0.05);
+  // not behind the results overlay / quit prompt: their full-screen backdrop blur is not race cost
+  if (ctx.auto && !ctx.finalized && !ctx.quitOpen) autoQuality(ctx, now);
+  // 0.1 s cap (physics substeps at 120 Hz regardless): with 0.05 a device under 20 fps raced in slow motion, and online
+  // its car fell behind in real time on everyone else's screen
+  const raw = clamp((now - ctx.last) / 1000, 0, 0.1);
   ctx.last = now;
   const dt = ctx.paused ? 0 : raw;
   try { update(ctx, dt); } catch (e) { if (ctx.errors++ < 3) console.error(e); }
@@ -1271,7 +1382,7 @@ function update(ctx, dt) {
     ctx.netAcc += dt;
     const p1 = cars.find(c => c.control === 'p1');
     if (p1 && ctx.netAcc >= 0.05) {
-      ctx.netAcc = 0;
+      ctx.netAcc = Math.min(ctx.netAcc - 0.05, 0.05);   // keep the remainder: a steady 20 Hz at any frame rate
       // ft: the public broker has been seen to ack and then drop a single QoS1 'finish', so the finish time also rides
       // on every state message, and 'finish' itself is repeated until results arrive
       const ft = p1.finished ? { ft: r3(p1.finishTime) } : null;
@@ -1405,6 +1516,7 @@ function render(ctx) {
     ctx.sun.target.updateMatrixWorld();
     const u = vh * r.getPixelRatio() * cam.projectionMatrix.elements[5] * 0.5;
     for (const p of ctx.fx) p.points.material.uniforms.uScale.value = u;
+    ctx.worldFx?.cull?.(cam);
     r.render(ctx.scene, cam);
   });
 }
@@ -1487,6 +1599,8 @@ const CSS = `
 .rg-link b{margin-left:4px;padding:0 6px;border-radius:6px;background:rgba(10,14,24,.6)}
 .rg-hint{position:absolute;left:50%;bottom:4px;transform:translateX(-50%);font-size:12px;opacity:.75;background:rgba(0,0,0,.4);padding:3px 12px;border-radius:999px;transition:opacity 1s;z-index:4;white-space:nowrap}
 .rg-hint.off{opacity:0}
+.rg-qtoast{position:absolute;left:50%;top:54px;transform:translateX(-50%);z-index:4;font:700 13px/1 system-ui,sans-serif;padding:6px 14px;border-radius:999px;background:rgba(0,0,0,.5);white-space:nowrap;pointer-events:none;animation:rgq 2.6s forwards}
+@keyframes rgq{0%,80%{opacity:1}100%{opacity:0}}
 .rg-quit{position:absolute;left:50%;top:10px;transform:translateX(-50%);z-index:5;width:36px;height:36px;padding:0;border-radius:50%;border:1px solid rgba(255,255,255,.3);background:rgba(0,0,0,.4);color:#fff;font:700 16px system-ui,sans-serif;cursor:pointer;opacity:.7}
 .rg-quit:hover{opacity:1}
 .rg-modal{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(4,6,12,.6);backdrop-filter:blur(4px);z-index:10}

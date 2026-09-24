@@ -416,10 +416,127 @@ export async function buildWorld(ctx, def) {
     onUpdate: fn => { updaters.push(fn); },
   };
   try { theme.build(api); } catch (err) { console.warn(`[world] theme '${def.theme}' build failed`, err); }
+  splitGround(ground, world);   // after the theme: it may recolour "the big terrain sheet"
   return {
     update(dt, time) {
       for (let i = updaters.length - 1; i >= 0; i--) {
         try { updaters[i](dt, time); } catch (err) { console.warn('[world] theme update dropped', err); updaters.splice(i, 1); }
+      }
+    },
+    ...tuneWorld(ctx, world, updaters),
+  };
+}
+
+// ======================================================================================
+// Performance (generic: runs after any theme / scenery build)
+// ======================================================================================
+const CELL = 500;   // m; smaller cells cull more triangles but cost draw calls (dear on phones)
+const hash01 = (x, z) => { const s = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return s - Math.floor(s); };
+
+// The ground sheet -> 4x4 tiles sharing its vertex buffers (no seams), so off-screen and fogged-out ground is culled.
+// (~400 m tiles on the big real circuits: -20% triangles at 'low' but +15 draw calls at 'high' - no clear win, not done)
+function splitGround(ground, world, tiles = 4) {
+  const g = ground.geometry, SEG = Math.sqrt((g.index?.count || 0) / 6), P = g.attributes.position, v = new THREE.Vector3();
+  if (!Number.isInteger(SEG) || SEG < tiles || P.count !== (SEG + 1) ** 2) return;
+  const per = Math.ceil(SEG / tiles), src = g.index.array;
+  for (let ty = 0; ty < SEG; ty += per) for (let tx = 0; tx < SEG; tx += per) {
+    const y1 = Math.min(SEG, ty + per), x1 = Math.min(SEG, tx + per), idx = [], box = new THREE.Box3();
+    for (let iy = ty; iy < y1; iy++) for (let k = (iy * SEG + tx) * 6, e = (iy * SEG + x1) * 6; k < e; k++) idx.push(src[k]);
+    for (let iy = ty; iy <= y1; iy++) for (let ix = tx; ix <= x1; ix++) box.expandByPoint(v.fromBufferAttribute(P, iy * (SEG + 1) + ix));
+    const tg = new THREE.BufferGeometry();
+    for (const k in g.attributes) tg.setAttribute(k, g.attributes[k]);
+    tg.setIndex(idx);
+    tg.boundingBox = box;   // set by hand: computeBounding* ignores the index and would cover the whole sheet
+    tg.boundingSphere = box.getBoundingSphere(new THREE.Sphere());
+    const t = new THREE.Mesh(tg, ground.material);
+    t.receiveShadow = ground.receiveShadow; t.castShadow = ground.castShadow;
+    world.add(t);
+  }
+  world.remove(ground);
+}
+
+// Static instanced scenery is split into CELL-sized chunks (culled per chunk in the main and the shadow pass) and sorted
+// by a position hash, so lowering `count` thins it evenly; parts sharing a position (trunk + crown) go together.
+// Left alone: animated meshes (an updater rewrites their matrices), frustumCulled = false, tiny sets.
+// userData.keepCount = true: split but never thinned (things that read as a sequence: posts, streetlights).
+// Returns { setQuality({ level, inst, far }), cull(camera) } for game.js.
+function tuneWorld(ctx, world, updaters) {
+  const { scene, env } = ctx, all = [], thin = [], points = [], cullable = [];
+  world.traverse(o => { if (o.isInstancedMesh) all.push(o); });
+  const v0 = all.map(m => m.instanceMatrix.version);
+  for (const f of updaters) { try { f(0, 0); } catch { /* reported by the race loop */ } }
+  all.forEach((m, j) => {
+    if (m.instanceMatrix.version !== v0[j] || !m.frustumCulled || m.count < 16 || !m.parent
+      || Object.values(m.geometry.attributes).some(a => a.isInstancedBufferAttribute)) return;
+    const n = m.count, M = m.instanceMatrix.array.slice(0, n * 16), C = m.instanceColor?.array.slice(0, n * 3), groups = new Map();
+    for (let i = 0; i < n; i++) {
+      const x = M[i * 16 + 12], z = M[i * 16 + 14], key = n < 200 ? 0 : Math.floor(x / CELL) * 65536 + Math.floor(z / CELL);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ h: hash01(x, z), i });
+    }
+    for (const list of groups.values()) {
+      list.sort((a, b) => a.h - b.h);
+      const c = groups.size === 1 ? m : new THREE.InstancedMesh(m.geometry, m.material, list.length);
+      if (C && !c.instanceColor) c.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(list.length * 3), 3);
+      list.forEach(({ i }, k) => {
+        c.instanceMatrix.array.set(M.subarray(i * 16, i * 16 + 16), k * 16);
+        if (C) c.instanceColor.array.set(C.subarray(i * 3, i * 3 + 3), k * 3);
+      });
+      if (c !== m) {
+        c.position.copy(m.position); c.quaternion.copy(m.quaternion); c.scale.copy(m.scale);
+        c.castShadow = m.castShadow; c.receiveShadow = m.receiveShadow; c.renderOrder = m.renderOrder; c.layers.mask = m.layers.mask;
+        c.name = m.name; c.userData = { ...m.userData };
+        m.parent.add(c);
+      }
+      c.count = list.length;
+      c.instanceMatrix.needsUpdate = true;
+      if (c.instanceColor) c.instanceColor.needsUpdate = true;
+      c.computeBoundingSphere();
+      c.userData.h = Float32Array.from(list, e => e.h);
+      c.userData.cast = c.castShadow;
+      if (!c.userData.keepCount) thin.push(c);
+    }
+    if (groups.size > 1) m.removeFromParent();
+  });
+  world.updateMatrixWorld(true);
+  world.traverse(o => {
+    if (o.isPointLight) points.push(o);
+    if (!(o.isMesh || o.isPoints || o.isLine) || !o.frustumCulled) return;
+    if (o.isInstancedMesh) { if (!o.boundingSphere) o.computeBoundingSphere(); } else if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+    cullable.push(o);
+  });
+  // 'low' keeps MeshStandard + the room environment: without its light, roads and car paint go near-black
+  // (tried MeshLambert twins: road luminance 67 -> 20 on canyon); pixels, shadows and AA are the bigger costs anyway.
+  const fog0 = { ...env.fog }, aniso = new Map(), ownFog = new Map();   // ownFog: theme shaders with their own fog uniforms
+  world.traverse(o => {
+    for (const m of [].concat(o.material || [])) {
+      for (const v of Object.values(m)) if (v?.isTexture && v.anisotropy > 2) aniso.set(v, v.anisotropy);
+      const u = m.uniforms;
+      if (u?.fogFar && !m.fog && !ownFog.has(u)) ownFog.set(u, [u.fogNear?.value, u.fogFar.value]);
+    }
+  });
+  const sph = new THREE.Sphere(), fwd = new THREE.Vector3();
+  return {
+    setQuality({ level, inst, far }) {
+      for (const m of thin) {
+        const h = m.userData.h;
+        let n = 0;
+        while (n < h.length && h[n] < inst) n++;
+        m.count = n;
+        m.castShadow = m.userData.cast && level === 'high';   // lower levels: only buildings / props / cars cast
+      }
+      if (scene.fog) { scene.fog.near = fog0.near * far; scene.fog.far = fog0.far * far; }
+      for (const [u, [n, f]] of ownFog) { if (u.fogNear) u.fogNear.value = n * far; u.fogFar.value = f * far; }
+      for (const l of points) l.visible = level !== 'low';   // city neon spill lights; the glowing materials stay
+      for (const [t, a] of aniso) { const want = level === 'low' ? 2 : a; if (t.anisotropy !== want) { t.anisotropy = want; t.needsUpdate = true; } }
+    },
+    // fog goes by view depth: whatever lies wholly deeper than its end is pure fog colour, so hide it (per view)
+    cull(cam) {
+      const far = scene.fog?.far ?? Infinity, p = cam.position, f = cam.getWorldDirection(fwd);
+      for (const o of cullable) {
+        sph.copy(o.isInstancedMesh ? o.boundingSphere : o.geometry.boundingSphere).applyMatrix4(o.matrixWorld);
+        const out = sph.center.sub(p).dot(f) - sph.radius > far;
+        if (out && o.visible) { o.visible = false; o.userData.farOff = true; } else if (!out && o.userData.farOff) { o.visible = true; o.userData.farOff = false; }
       }
     },
   };
@@ -464,6 +581,7 @@ function buildBarriers({ THREE, world, track, env, night, rnd, col }) {
     }
     im.count = c;
     im.castShadow = im.receiveShadow = true;
+    im.userData.keepCount = true;   // a gap in a row of posts / rocks would show
     world.add(im);
     return im;
   };

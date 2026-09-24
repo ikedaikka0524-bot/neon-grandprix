@@ -10,6 +10,7 @@ import { CAR_BY_ID, STARTER_CAR } from './data.js';
 import { createP2P } from './p2p.js';
 import { newCarRec } from './save.js';
 import { TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
+import { BUILD } from './version.js';
 
 const BROKERS = [
   'wss://broker.emqx.io:8084/mqtt',
@@ -74,6 +75,7 @@ function entry(pid, d = {}) {
     name: String(d.name ?? '').trim().slice(0, 16) || 'Player',
     carId,
     look: { body: HEX.test(l.body) ? l.body : def.body, wheel: HEX.test(l.wheel) ? l.wheel : def.wheel, wing: !!l.wing },
+    v: typeof d.v === 'string' ? d.v.slice(0, 32) : '',   // build id ('' = a build from before versions)
   };
 }
 
@@ -113,15 +115,16 @@ function wire(client, base, onMsg, capped) {
 // channel (p2p send/isOpen turn false 2.5 s after the last pong; send then still uses the channel too).
 function links(pid, pub, roster, onP2P) {
   let p2p = null, brtt = null, seq = 0, closed = false;
-  const peers = new Map();   // pid -> { q, br }
-  const linked = new Set();
+  const peers = new Map();   // pid -> { q, br, noq }
+  const linked = new Map();  // pid -> when sync() started linking it
   const call = (fn, ...a) => { try { return p2p?.[fn](...a); } catch (e) { console.warn('[net] p2p', e); } };
   const others = () => roster().flatMap(e => (e?.pid != null && String(e.pid) !== pid ? [String(e.pid)] : []));
   const inRoster = p => others().includes(p);
+  // one-way ms, null = not measured yet (rtt: null until the first pong; br: the peer's comes with its states)
   const lat = (p, direct) => {
-    if (direct) return (call('rtt', p) ?? 60) / 2;   // rtt: null until the first pong
+    if (direct) { const r = call('rtt', p); return r == null ? null : r / 2; }
     const br = peers.get(p)?.br;
-    return br != null && brtt != null ? (br + brtt) / 2 : 150;
+    return br != null && brtt != null ? (br + brtt) / 2 : null;
   };
   try {
     p2p = createP2P({ selfPid: pid, sendSignal: (to, data) => { if (!closed) pub(`s/${to}`, { from: pid, data }); } });
@@ -151,8 +154,8 @@ function links(pid, pub, roster, onP2P) {
     sync() {
       if (closed) return;
       const now = new Set(others());
-      for (const p of now) if (!linked.has(p)) { linked.add(p); call('connect', p); }
-      for (const p of linked) if (!now.has(p)) { linked.delete(p); peers.delete(p); call('close', p); }
+      for (const p of now) if (!linked.has(p)) { linked.set(p, performance.now()); call('connect', p); }
+      for (const p of linked.keys()) if (!now.has(p)) { linked.delete(p); peers.delete(p); call('close', p); }
     },
     // incoming state (either path): false if stale / duplicate / not a roster peer; else notes it and sets m.lat
     accept(m, viaP2P) {
@@ -160,9 +163,10 @@ function links(pid, pub, roster, onP2P) {
       if (!inRoster(p)) return false;
       let st = peers.get(p);
       if (!st) peers.set(p, st = {});
-      if (Number.isFinite(m.q)) { if (m.q <= st.q) return false; st.q = m.q; }   // no q: old client, MQTT only
+      if (Number.isFinite(m.q)) { if (m.q <= st.q) return false; st.q = m.q; }
+      else st.noq = true;   // no q: a build from before P2P, MQTT only
       st.br = Number.isFinite(m.br) ? Math.min(Math.max(m.br, 0), 5000) : null;
-      m.lat = lat(p, viaP2P);
+      m.lat = lat(p, viaP2P) ?? (viaP2P ? 30 : 150);   // prediction needs a number; the HUD shows '~' instead
       return true;
     },
     // outgoing state: stamps it, sends it on every open channel; true if it must go over MQTT as well
@@ -173,12 +177,18 @@ function links(pid, pub, roster, onP2P) {
       for (const p of others()) if (!call('send', p, m)) relay = true;
       return relay;
     },
-    // { [pid]: { p2p, lat } } for the HUD
+    // { [pid]: { p2p, lat /* ms or null */, label } } for the HUD: '直結 45ms', '中継 (旧版) 180ms', '中継 (直結不可) ~'.
+    // 旧版 = an outdated build: states without q (predates P2P), or a roster build id unlike ours (hosts only start
+    // same-build rooms, so that's a host from before build ids: its roster has none, and it is the old one).
+    // 直結不可 = same build, but no channel 10 s after linking (STUN can't cross those NATs, no TURN; or no WebRTC).
     info() {
-      const out = {};
+      const out = {}, v = p => roster().find(e => String(e?.pid) === p)?.v, mine = v(pid);
       for (const p of others()) {
-        const direct = !!call('isOpen', p);
-        out[p] = { p2p: direct, lat: Math.round(lat(p, direct)) };
+        const direct = !!call('isOpen', p), l = lat(p, direct), ms = l == null ? '~' : `${Math.round(l)}ms`;
+        const old = peers.get(p)?.noq || (mine ? v(p) !== mine : String(roster()[0]?.pid) === p);
+        const settled = performance.now() - (linked.get(p) ?? Infinity) > 10000;
+        const why = direct ? '' : old ? ' (旧版)' : settled ? ' (直結不可)' : '';
+        out[p] = { p2p: direct, lat: l == null ? null : Math.round(l), label: `${direct ? '直結' : '中継'}${why} ${ms}` };
       }
       return out;
     },
@@ -347,7 +357,7 @@ export async function hostRoom(name) {
 
   const s = {
     isHost: true, code, pid,
-    roster: [entry(pid, { name })],
+    roster: [entry(pid, { name, v: BUILD })],
     trackId: DEFAULT_TRACK,
     setTrack(id) { if (isTrack(id) && !closed) { s.trackId = id; pushRoster(); } },
     on: ee.on,
@@ -424,7 +434,7 @@ export async function joinRoom(code, name, me = {}) {
     emit(m.t, m.t === 'roster' ? m.roster : m);
   }, CAPPED.has(brokerOf(code)));
   const L = links(pid, pub, () => s.roster, m => { if (joined && !closed && sameRace(m, lastRid) && L.accept(m, true)) emit('state', m); });
-  const sayHello = () => pub('h', { t: 'hello', pid, name, carId: me.carId, look: me.look });
+  const sayHello = () => pub('h', { t: 'hello', pid, name, carId: me.carId, look: me.look, v: BUILD });
 
   function close() {
     if (closed) return;

@@ -13,7 +13,24 @@
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
+    "./abilities.js": "./abilities.js?v=20260924164312",
+    "./carmodel.js": "./carmodel.js?v=20260924164312",
+    "./data.js": "./data.js?v=20260924164312",
+    "./game.js": "./game.js?v=20260924164312",
+    "./ghost.js": "./ghost.js?v=20260924164312",
+    "./net.js": "./net.js?v=20260924164312",
+    "./netpredict.js": "./netpredict.js?v=20260924164312",
+    "./p2p.js": "./p2p.js?v=20260924164312",
+    "./save.js": "./save.js?v=20260924164312",
+    "./theme-beach.js": "./theme-beach.js?v=20260924164312",
+    "./theme-city.js": "./theme-city.js?v=20260924164312",
+    "./theme-desert.js": "./theme-desert.js?v=20260924164312",
+    "./theme-snow.js": "./theme-snow.js?v=20260924164312",
+    "./tracks.js": "./tracks.js?v=20260924164312",
+    "./ui.js": "./ui.js?v=20260924164312",
+    "./version.js": "./version.js?v=20260924164312",
+    "./world.js": "./world.js?v=20260924164312"
   }
 }
 </script>
@@ -488,6 +505,9 @@ input[type=color]::-moz-color-swatch{border:0;border-radius:6px}
 .settings{max-width:640px;margin:0 auto;padding:24px;display:flex;flex-direction:column;gap:16px}
 .srow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}
 .srow>span{font-weight:700}
+.srow .hint{display:block;margin-top:2px;font-weight:400}
+.srow .seg{flex:none}
+.srow .seg button{min-width:40px;padding:8px 10px;font-family:var(--font);white-space:nowrap}
 .stats3{display:flex;gap:20px;flex-wrap:wrap;color:var(--dim);font-size:13px}
 .stats3 b{font:700 18px var(--num);color:var(--text);margin-left:4px}
 .danger-zone{padding:16px;border-radius:14px;border:1px solid rgba(255,77,109,.4);background:rgba(255,77,109,.06);display:flex;flex-direction:column;gap:10px;align-items:flex-start}
@@ -546,6 +566,14 @@ input[type=color]::-moz-color-swatch{border:0;border-radius:6px}
 #toast{position:fixed;left:50%;bottom:max(24px,env(safe-area-inset-bottom));z-index:95;transform:translate(-50%,30px);opacity:0;pointer-events:none;padding:12px 18px;border-radius:12px;background:rgba(10,14,32,.95);border:1px solid var(--line2);box-shadow:0 10px 30px rgba(0,0,0,.5);font-weight:700;max-width:calc(100vw - 32px);transition:.25s}
 #toast.show{opacity:1;transform:translate(-50%,0)}
 #toast.err{border-color:var(--red);color:#ffd0d8}
+.upd-box{display:grid;gap:6px;text-align:center;padding:22px 28px}
+.upd-box b{font:400 20px var(--disp)}
+.upd-box small{color:var(--dim)}
+#updating{z-index:99}
+#newVer{position:fixed;left:50%;bottom:max(16px,env(safe-area-inset-bottom));z-index:94;transform:translateX(-50%);display:flex;align-items:center;gap:12px;padding:8px 10px 8px 16px;border-radius:12px;background:rgba(10,14,32,.95);border:1px solid var(--gold);box-shadow:0 10px 30px rgba(0,0,0,.5);font-weight:700;max-width:calc(100vw - 32px)}
+body.racing #newVer{display:none}
+.roster em.old{background:var(--red);color:#fff}
+.ver-warn{display:grid;gap:10px;padding:12px 14px;border-radius:12px;border:1px solid var(--red);background:rgba(255,77,109,.1);font-weight:700}
 #wipe{position:fixed;inset:0;z-index:90;pointer-events:none;overflow:hidden;visibility:hidden}
 #wipe::before{content:"";position:absolute;top:0;bottom:0;left:-40%;right:-40%;background:linear-gradient(90deg,var(--cyan) 0 1.2%,#070a18 1.2% 98.8%,var(--pink) 98.8%);transform:translateX(-130%) skewX(-18deg)}
 #wipe span{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font:900 clamp(22px,4vw,34px) var(--num);letter-spacing:.3em;color:#fff;text-shadow:0 0 18px var(--cyan);opacity:0;transition:opacity .2s}
@@ -681,6 +709,7 @@ input[type=color]::-moz-color-swatch{border:0;border-radius:6px}
         <div class="panel lobby" id="onRoom" hidden>
           <div class="code-box"><div class="lbl">ルームコード</div><div class="code" id="roomCode">-----</div><button class="btn sm" id="btnCopy">コピー</button></div>
           <ul class="roster" id="roster"></ul>
+          <div class="ver-warn" id="onVer" hidden></div>
           <div class="room-actions"><button class="btn" id="btnLeave">退出</button><button class="btn primary big" id="btnGo">スタート</button><div class="wait" id="roomWait"></div></div>
         </div>
         <div class="panel course-panel" id="onCoursePanel" hidden><div class="cp-h"><h3>コース</h3><span id="onCourseNote"></span></div><div class="courses" id="onCourses"></div></div>
@@ -753,6 +782,7 @@ input[type=color]::-moz-color-swatch{border:0;border-radius:6px}
         <h2>設定</h2>
         <label class="field">プレイヤー名（オンライン・リザルトに表示）<input class="inp" id="setName" maxlength="12" autocomplete="off"></label>
         <div class="srow"><span>効果音</span><input type="checkbox" class="toggle" id="setSound" aria-label="効果音"></div>
+        <div class="srow"><span>画質<small class="hint">カクつく・重いときは「低」。自動は動きの重さを見て切り替えます</small></span><div class="seg" id="setQuality" role="group" aria-label="画質"><button data-q="auto">自動</button><button data-q="high">高</button><button data-q="medium">中</button><button data-q="low">低</button></div></div>
         <div class="field">記録<div class="stats3" id="setStats"></div></div>
         <div class="danger-zone">
           <h3>データのリセット</h3>
@@ -803,6 +833,10 @@ input[type=color]::-moz-color-swatch{border:0;border-radius:6px}
 <div id="toast"></div>
 <div id="wipe"><span>READY</span></div>
 
-<script type="module" src="ui.js"></script>
+<div id="updating" class="overlay" hidden><div class="panel upd-box"><b>アップデート中…</b><small>最新版を読み込んでいます</small></div></div>
+<div id="newVer" hidden><span>新しいバージョンがあります</span><button class="btn sm primary" id="btnNewVer">更新</button></div>
+
+<!-- through the import map, so ui.js and everything it imports load as ?v=<build> (tools/bump-build.mjs) -->
+<script type="module">import './ui.js';</script>
 </body>
 </html>

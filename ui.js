@@ -10,6 +10,7 @@ import { getSave, persist, newCarRec, resetSave, reloadSave, loadGhost, saveGhos
 import { buildCarMesh, preloadCarModels } from './carmodel.js';
 import { startRace, stopRace } from './game.js';
 import { hostRoom, joinRoom } from './net.js';
+import { BUILD } from './version.js';
 
 /* ================= helpers ================= */
 const $ = (s, r = document) => r.querySelector(s);
@@ -532,6 +533,9 @@ function startMode(mode) {
 let race = null, raceTok = 0;
 async function launch(opts, screen) {
   if (race) return;
+  // newer build deployed: a course / scenery module this tab hasn't loaded yet would come from it (Pages ignores ?v)
+  // and run against this tab's old world.js, so reload into the new build first (online: the lobby's build check)
+  if (opts.mode !== 'online' && !$('#newVer').hidden && await update() !== false) return;
   const tok = ++raceTok, w = $('#wipe');
   race = { opts, screen, done: false };
   hideResults(); hideTip(); modalClose?.();
@@ -543,6 +547,7 @@ async function launch(opts, screen) {
   try {
     await startRace({
       ...opts,
+      quality: save.quality,
       onFinish: res => { if (tok === raceTok) onFinish(res); },
       onQuit: () => { if (tok === raceTok) quitRace(); },
     });
@@ -567,6 +572,7 @@ function endRace() {
   const back = race?.screen || 'home';
   teardownRace();
   show(back, false);
+  checkUpdate(false);   // the 5-min poll skips race / results time, so back-to-back races would never look
 }
 // Quit from the race (Esc → 終了する) or a failed start. Online that means leaving the room ('オンライン対戦から退出します'),
 // so the others get 'leave' (car removed, results not held up) and a quitting host can't restart over live races.
@@ -700,23 +706,37 @@ function renderLobbyCourses() {
   $('#onCourseNote').textContent = s.isHost ? 'コースを選ぶと全員に反映されます' : 'ホストがコースを選びます';
   renderCourses($('#onCourses'), TRACK_BY_ID[s.trackId] ? s.trackId : DEFAULT_TRACK, { ro: !s.isHost });
 }
+// Build ids in the room: the newest wins, everyone else is outdated ('' = a build from before versions existed). Only
+// same-build rooms start: an outdated player's cached files miss fixes (an old one had no P2P: '中継 150ms' lag).
+function lobbyVer() {
+  const s = NET.s, list = roster();
+  const v = r => (r.pid === s.pid ? BUILD : typeof r.v === 'string' ? r.v : '');
+  const newest = list.reduce((a, r) => (v(r) > a ? v(r) : a), BUILD);
+  return { old: r => v(r) !== newest, any: list.some(r => v(r) !== newest), me: BUILD !== newest, host: !!list[0] && v(list[0]) !== newest };
+}
 function renderRoster() {
   const s = NET.s;
   if (!s || cur !== 'online') return;
-  const list = roster();
+  const list = roster(), ver = lobbyVer();
   $('#roster').innerHTML = [0, 1, 2, 3].map(i => {
     const r = list[i];
     if (!r) return `<li class="empty"><span class="slot">P${i + 1}</span><span class="nm">募集中…</span><span></span></li>`;
     const c = CAR_BY_ID[r.carId];
-    return `<li style="--rc:${c ? RARITY[c.rarity].color : '#667'}"><span class="slot">P${i + 1}</span><span class="nm">${esc(cleanName(r.name))}${i === 0 ? '<em class="host">HOST</em>' : ''}${r.pid === s.pid ? '<em class="you">YOU</em>' : ''}</span><span class="car">${c ? rb(c.rarity) + esc(c.name) : ''}</span></li>`;
+    return `<li style="--rc:${c ? RARITY[c.rarity].color : '#667'}"><span class="slot">P${i + 1}</span><span class="nm">${esc(cleanName(r.name))}${i === 0 ? '<em class="host">HOST</em>' : ''}${r.pid === s.pid ? '<em class="you">YOU</em>' : ''}${ver.old(r) ? '<em class="old">バージョンが古い</em>' : ''}</span><span class="car">${c ? rb(c.rarity) + esc(c.name) : ''}</span></li>`;
   }).join('');
   renderLobbyCourses();
   const go = $('#btnGo');
   go.hidden = !s.isHost;
-  go.disabled = list.length < 2;
+  go.disabled = list.length < 2 || ver.any;
   $('#roomWait').textContent = s.isHost
-    ? (list.length < 2 ? '2人以上そろうとスタートできます' : '準備OK！ スタートを押そう')
+    ? (list.length < 2 ? '2人以上そろうとスタートできます' : ver.any ? '全員のバージョンがそろうとスタートできます' : '準備OK！ スタートを押そう')
     : 'ホストがスタートするのを待っています…';
+  const warn = $('#onVer');
+  warn.hidden = !ver.any;
+  warn.innerHTML = ver.me
+    ? `<span>あなたのバージョンが古いです。更新してね${s.isHost ? '（部屋は閉じます）' : '（更新後この部屋に戻ります）'}</span><button class="btn primary big wide" data-update>更新</button>`
+    : ver.host ? '<span>ホストのバージョンが古いです。ホストにページを更新（再読み込み）してもらってね</span>'
+    : '<span>バージョンが古いプレイヤーがいます。その人が更新（再読み込み）するまでスタートできません</span>';
 }
 async function connect(host) {
   if (NET.busy || NET.s) return;
@@ -1085,6 +1105,7 @@ function renderSettings() {
   mount(null);
   $('#setName').value = save.name;
   $('#setSound').checked = save.sound !== false;
+  $$('#setQuality button').forEach(b => b.classList.toggle('on', b.dataset.q === save.quality));
   $('#setStats').innerHTML = `<span>レース<b>${save.stats.races}</b></span><span>優勝<b>${save.stats.wins}</b></span><span>コレクション<b>${owned().length}/${CARS.length}</b></span>`;
 }
 function setName(v) {
@@ -1132,7 +1153,7 @@ $('#btnLeave').onclick = async () => {
 };
 $('#btnGo').onclick = () => {
   const s = NET.s;
-  if (!s?.isHost || roster().length < 2) return;
+  if (!s?.isHost || roster().length < 2 || lobbyVer().any) return;
   $('#btnGo').disabled = true;
   try { s.startGame(); } catch (e) { console.error(e); toast('スタートできませんでした', 'err'); renderRoster(); }
 };
@@ -1198,6 +1219,13 @@ svg.addEventListener('focusout', hideTip);
 // settings
 $('#setName').addEventListener('change', e => { e.target.value = setName(e.target.value); toast('名前を保存しました'); });
 $('#setSound').addEventListener('change', e => { save.sound = e.target.checked; persist(); if (save.sound) sfx.coin(); });
+$('#setQuality').onclick = e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  save.quality = b.dataset.q;
+  persist();
+  renderSettings();
+};
 $('#setReset').onclick = async () => {
   if (!await ask({ title: 'データのリセット', html: '<p>コイン・チケット・車・スキル・記録・ゴーストがすべて消えます。<br>本当にリセットしますか？</p>', yes: 'リセットする', danger: true })) return;
   CARS.forEach(c => TRACKS.forEach(t => saveGhost(c.id, t.id, null)));
@@ -1246,9 +1274,55 @@ addEventListener('keydown', e => {
   if ((e.code === 'Enter' || e.code === 'NumpadEnter') && PREP[cur] && !$('#btnStart').disabled) { e.preventDefault(); startMode(cur); }
 });
 
+/* ================= auto-update ================= */
+// build.json (uncached) names the deployed build, version.js the one this tab runs. GitHub Pages lets browsers cache
+// files for 10 min and a normal reload keeps cached ES modules, so a tab can come up old: re-fetch the page and the
+// new build's modules past the HTTP cache, then reload (index.html's import map loads every module as ?v=<build>,
+// so the reload can't mix old and new files).
+async function latestBuild() {
+  try {
+    const j = await (await fetch('build.json', { cache: 'no-store', signal: AbortSignal.timeout?.(8000) })).json();
+    return typeof j?.build === 'string' ? j : null;
+  } catch { return null; }   // offline / no build.json: carry on with what we have
+}
+let updating = false;
+async function update(info) {
+  if (updating) return;
+  updating = true;
+  $('#updating').hidden = false;
+  try { if (NET.s && !NET.s.isHost) sessionStorage.setItem('ngp.rejoin', NET.s.code); } catch { /* no storage */ }
+  info ??= await latestBuild();
+  const urls = [location.href.split('#')[0], 'index.html', ...(info?.files || []).map(f => `${f}?v=${info.build}`)];
+  const ok = await Promise.all(urls.map(u => fetch(u, { cache: 'reload', signal: AbortSignal.timeout?.(20000) }).then(r => r.ok, () => false)));
+  if (ok[0]) return location.reload();
+  // page unreachable (offline): a reload would swap the running game for the browser's error page
+  updating = false;
+  $('#updating').hidden = true;
+  try { sessionStorage.removeItem('ngp.rejoin'); } catch { /* no storage */ }
+  toast('オフラインのため更新できません', 'err');
+  return false;
+}
+async function checkUpdate(boot) {
+  const info = await latestBuild();
+  if (updating || !(info?.build > BUILD)) return;
+  // once per build per tab: if the reload still came up old (CDN lag), don't loop, offer the button instead
+  let tried = null;
+  try { tried = sessionStorage.getItem('ngp.upd'); } catch { /* no storage */ }
+  if (!boot || race || NET.s || tried === info.build) { $('#newVer').hidden = false; return; }
+  try { sessionStorage.setItem('ngp.upd', info.build); } catch { $('#newVer').hidden = false; return; }   // no storage: can't guard against a loop
+  update(info);
+}
+$('#btnNewVer').onclick = () => update();
+$('#onVer').onclick = e => { if (e.target.closest('[data-update]')) update(); };
+checkUpdate(true);
+setInterval(() => { if (!race) checkUpdate(false); }, 5 * 60e3);
+
 /* ================= boot ================= */
 $('#homeCourses').innerHTML = `<span class="tz-h"><small>COURSES</small><b>${TRACKS.length} コース</b><em>${TRACKS.map(t => THEME[t.theme].name).join('・')}</em></span>`
   + `<span class="tz-maps">${TRACKS.map(t => `<i style="--tc:${THEME[t.theme].c}" title="${esc(t.name)}">${COURSE[t.id].svg(false)}</i>`).join('')}</span>`;
 preloadCarModels(CARS.map(c => c.id)).catch(() => {});
 show('home', false);
 requestAnimationFrame(loop);
+let rejoin = null;   // an outdated guest pressed 更新 in a room: go back in
+try { rejoin = sessionStorage.getItem('ngp.rejoin'); sessionStorage.removeItem('ngp.rejoin'); } catch { /* no storage */ }
+if (rejoin) { show('online'); $('#codeIn').value = rejoin; connect(false); }

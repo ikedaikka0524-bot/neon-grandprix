@@ -328,6 +328,7 @@ function build(api) {
     rocks.setColorAt(i, tc.setHSL(0.07 + rnd() * 0.04, 0.12 + rnd() * 0.1, 0.24 + rnd() * 0.12));
   });
   rocks.castShadow = rocks.receiveShadow = true;
+  rocks.userData.keepCount = true;   // the ocean's uRocks foam rings are baked from every rock: a thinned one leaves foam in open sea
   world.add(rocks);
 
   // ---- ocean: coast-distance field baked into a half-float texture, flat plane shaded with analytic waves

@@ -739,6 +739,7 @@ function build(api) {
       if (l.road) { glint(hx, l.y1 - 0.3, hz, l.c, 5, 0.3); l.hx = hx; l.hz = hz; }
     });
     poles.castShadow = arms.castShadow = true;
+    for (const m of [poles, arms, heads, cones]) m.userData.keepCount = true;   // parts sit apart: thinning would split them
     world.add(poles, arms, heads, cones);
   }
 

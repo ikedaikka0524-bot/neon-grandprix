@@ -1,0 +1,22 @@
+{
+  "build": "20260924164312",
+  "files": [
+    "abilities.js",
+    "carmodel.js",
+    "data.js",
+    "game.js",
+    "ghost.js",
+    "net.js",
+    "netpredict.js",
+    "p2p.js",
+    "save.js",
+    "theme-beach.js",
+    "theme-city.js",
+    "theme-desert.js",
+    "theme-snow.js",
+    "tracks.js",
+    "ui.js",
+    "version.js",
+    "world.js"
+  ]
+}
