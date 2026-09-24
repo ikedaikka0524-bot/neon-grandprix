@@ -464,7 +464,7 @@ function renderCourses(box, sel, { ro = false, ghost = false } = {}) {
       ? (g ? `<span>ゴースト</span><b>${fmt(g.time)}</b>` : '<span class="none">ゴーストなし</span>')
       : `<span>ベスト</span><b>${fmt(b.race)}</b><span>ラップ</span><b>${fmt(b.lap)}</b>`;
     return `<button class="course ${on ? 'on' : ''}" data-track="${t.id}" style="--tc:${THEME[t.theme].c}" aria-pressed="${on}"${ro && !on ? ' disabled' : ''}>`
-      + `<span class="c-map">${COURSE[t.id].svg(on)}<em>${THEME[t.theme].name}・${TIME[t.time]}</em><span class="c-diff" title="難易度 ${t.difficulty}">${stars(t.difficulty)}</span></span>`
+      + `<span class="c-map">${COURSE[t.id].svg(on)}<em>${t.label || THEME[t.theme].name}・${TIME[t.time]}</em><span class="c-diff" title="難易度 ${t.difficulty}">${stars(t.difficulty)}</span></span>`
       + `<span class="c-body"><span class="c-h"><b>${esc(t.name)}</b></span>`
       + `<span class="c-desc">${esc(t.desc)}</span>`
       + `<span class="c-spec"><span>${COURSE[t.id].km} km</span><span>${t.laps}周</span>${mul > 1 ? `<span class="c-mul">コイン×${mul}</span>` : ''}</span>`
@@ -1247,7 +1247,7 @@ addEventListener('keydown', e => {
 });
 
 /* ================= boot ================= */
-$('#homeCourses').innerHTML = `<span class="tz-h"><small>COURSES</small><b>${TRACKS.length} コース</b><em>${TRACKS.map(t => THEME[t.theme].name).join('・')}</em></span>`
+$('#homeCourses').innerHTML = `<span class="tz-h"><small>COURSES</small><b>${TRACKS.length} コース</b><em>${TRACKS.map(t => t.label || THEME[t.theme].name).join('・')}</em></span>`
   + `<span class="tz-maps">${TRACKS.map(t => `<i style="--tc:${THEME[t.theme].c}" title="${esc(t.name)}">${COURSE[t.id].svg(false)}</i>`).join('')}</span>`;
 preloadCarModels(CARS.map(c => c.id)).catch(() => {});
 show('home', false);

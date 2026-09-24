@@ -241,3 +241,10 @@ Themes: **city** night — skyline of lit-window towers (canvas window textures,
 ## carmodel.js (v2, CARS agent)
 - Verify in the browser that every `models/*.glb` car faces +Z (nose forward) with its `modelRot`; fix per-car `modelRot` in data.js if not.
 - Textured GLBs: the Meshy texture already has the right colours. Default look must show the texture untinted; only when the player picks a body colour different from the car's default, tint the largest material in a way that keeps texture detail (e.g. multiply by a lightened colour or hue-shift). Verify visually for 3–4 cars.
+
+## Scenery modules (real circuits)
+- A course def may set `scenery: '<id>'`; world.js imports `./scenery/<id>.js` (cached; missing/broken → plain base theme, warning only).
+- `export default { base, env, baseBuild, build(api) }`: `base` = theme name (keep equal to the def's `theme`); `env` = partial env deep-merged over the base theme's env (plain objects merge, arrays/functions/values replace; `night` drives headlights); `baseBuild` (default true) also runs the base theme's `build(api)` first; then `build(api)` runs with the same api (+ `api.base` = base theme module; blockers shared). Must be synchronous.
+- `def.time` is only the UI label: set sky/fog/sun/`night` in `env` to match it. Everything added to `api.world` is disposed on stopRace.
+- Optional `def.label` replaces the base theme's name on the course chip (e.g. Sepang borrows 'beach' but shows 熱帯).
+- A module that reuses another module's kit loads it with its own query (``await import(`./nring.js${new URL(import.meta.url).search}`)``), not a static import: world.js retries a failed module as `?retry=N`, and a failed static dependency stays failed under its plain URL.
