@@ -142,7 +142,7 @@ function build(api) {
       const y = G(x, z) - 1.5, ry = 0.35 * Math.sin(gx * 0.004 + 1) + 0.3 * Math.cos(gz * 0.0037) + R(-0.08, 0.08);
       const col = fav ? (rnd() < 0.55 ? pick(['#b5653e', '#c47a4a', '#a0522d', '#b86f45']) : pick(['#e9c46a', '#6fb3d2', '#e76f51', '#f4a6c1', '#8ab17d', '#f1faee', '#9fd3c7'])) : pick(['#f1ede4', '#f4e3b5', '#e8d6c0', '#dfe8e6', '#f2d7c4', '#ffffff']);
       houses.push([x, y, z, ry, w, h + 1.5, dd, col]);
-      if (fav && rnd() < 0.45) tanks.push([x + R(-1, 1), y + h + 1.5, z + R(-1, 1), 0, 1, 1, 1, '#2f6db5']);
+      if (fav && rnd() < 0.45) tanks.push([x, y + h + 1.5, z, R(-1, 1) + R(-1, 1), 1, 1, 1, '#2f6db5']);   // at the house's x, z: world.js thins both together
       if (!fav) roofs.push([x, y + h + 1.5, z, ry, w + 0.8, 1, dd + 0.8, pick(['#b4553a', '#a8462f', '#c0674a'])]);
     }
     const hg = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), uv = hg.attributes.uv;

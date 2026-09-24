@@ -277,10 +277,11 @@ function build(api) {
 
   // ---- sailing dinghies drifting on slow loops, bobbing on the chop
   const boats = [];
-  for (let n = 0, t = 0; n < 14 && t < 800; t++) {
+  for (let t = 0; t < 800; t++) {   // all 800 tries draw from rnd (keeps the rest of the layout), 14 boats kept
     const x = R(LB[0], LB[1]), z = R(LB[2], LB[3]), sd = lakeSD(x, z);
     if (sd < 30) continue;
-    boats.push({ x, z, r: R(6, Math.min(40, sd - 14)), w: R(0.02, 0.05) * (rnd() < 0.5 ? -1 : 1), ph: rnd() * TAU });
+    const b = { x, z, r: R(6, Math.min(40, sd - 14)), w: R(0.02, 0.05) * (rnd() < 0.5 ? -1 : 1), ph: rnd() * TAU };
+    if (boats.length < 14) boats.push(b);
   }
   const sails = ['#ffffff', '#ffffff', '#f4d35e', '#e63946', '#3a86ff', '#ffffff'];
   const tri = (pts, color) => {
@@ -303,6 +304,7 @@ function build(api) {
   boats.forEach((b, k) => boatMesh.setColorAt(k, new THREE.Color(sails[k % sails.length])));
   boatMesh.count = boats.length;
   boatMesh.castShadow = true;
+  boatMesh.frustumCulled = false;   // they sail loops: the bounding sphere cached at the first frame would cull them
   world.add(boatMesh);
   const dmy = new THREE.Object3D();
   dmy.rotation.order = 'YXZ';

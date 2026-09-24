@@ -256,7 +256,7 @@ function build(api) {
     return false;
   };
 
-  const vc = [], glow = [], halos = [], refl = [];   // statics, self-lit parts, glow sprites, lights mirrored in the bay
+  const vc = [], glow = [], halos = [], refl = [], braces = [];   // statics, self-lit parts, glow sprites, lights mirrored in the bay, gantry lattice
   const towers = [[], [], []], octs = [], crowd = [], palms = [[], []], rainTrees = [];
   const halo = (x, y, z, c, size) => { C3.set(c); halos.push([x, y, z, C3.r, C3.g, C3.b, size]); };
   const mirror = (x, y, z, c, k) => refl.push([x, y, z, c, k]);
@@ -300,7 +300,7 @@ function build(api) {
     },
     vertexShader: WATER_VS, fragmentShader: WATER_FS, fog: true,
   });
-  const water = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000, 48, 48).rotateX(-Math.PI / 2), waterMat);
+  const water = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000, 8, 8).rotateX(-Math.PI / 2), waterMat);
   water.position.set(-600, WATER, 300);
   water.frustumCulled = false;
   world.add(water);
@@ -391,7 +391,7 @@ function build(api) {
       if (api.near(px, pz)[0] < WALL + 1.5) continue;   // another stretch of the lap passes close by
       const H = 12.5;
       vc.push(part(new THREE.BoxGeometry(0.7, H, 0.7), '#5e636d', px, H / 2, pz, ry));
-      for (let y = 1.5; y < H - 1; y += 2.2) vc.push(part(new THREE.BoxGeometry(0.1, 2.9, 0.1), '#7a808b', px, y + 1.1, pz, ry, 0, 0.7 * (y % 4.4 < 2.2 ? 1 : -1)));
+      for (let y = 1.5; y < H - 1; y += 2.2) braces.push(part(new THREE.BoxGeometry(0.1, 2.9, 0.1), '#7a808b', px, y + 1.1, pz, ry, 0, 0.7 * (y % 4.4 < 2.2 ? 1 : -1)));
       vc.push(beam(V3(px, H - 0.3, pz), V3(ax, H - 0.3, az), 0.45, '#5e636d'), beam(V3(px, H - 2.6, pz), V3(mx, H - 0.4, mz), 0.2, '#6d727c'));
       for (const [lx, lz] of [[ax, az], [mx, mz]]) {
         vc.push(part(new THREE.BoxGeometry(2.8, 0.55, 1.1), '#2a2d33', lx, H - 0.85, lz, ry));
@@ -680,10 +680,13 @@ function build(api) {
   const unitBox = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
   const TEX = [api.canvasTex(256, 256, paintOffice), api.canvasTex(256, 256, paintHotel), api.canvasTex(256, 256, paintGlass)];
   const mats = [facadeMat(TEX[0], 2.4, 3.9, 16, 16, 1.25), facadeMat(TEX[1], 3.2, 3.3, 16, 16, 1.15, { rough: 0.7, metal: 0.1 }), facadeMat(TEX[2], 2.2, 4.2, 16, 16, 1.3, { rough: 0.25, metal: 0.6 })];
-  towers.forEach((list, k) => inst(unitBox, mats[k], list, boxSet, e => e[7]));
-  inst(new THREE.CylinderGeometry(0.5, 0.5, 1, 8, 1).translate(0, 0.5, 0), mats[2], octs, boxSet, () => '#1c2230');
-  inst(new THREE.PlaneGeometry(0.5, 0.78).rotateY(Math.PI), new THREE.MeshStandardMaterial({ roughness: 0.8, side: THREE.DoubleSide, emissive: '#ffffff', emissiveIntensity: 0.08 }), crowd,
-    ([x, y, z, ry]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.set(R(0.9, 1.1), R(0.85, 1.15), 1); }, e => e[4]);
+  // keepCount: world.js thins instanced scenery at lower quality; towers carry merged crowns / warning lights / halos,
+  // seated crowds would show gaps
+  const keep = (m, k = true) => { if (m) m.userData.keepCount = k; };   // crowds: 'medium' (thinned only at low)
+  towers.forEach((list, k) => keep(inst(unitBox, mats[k], list, boxSet, e => e[7])));
+  keep(inst(new THREE.CylinderGeometry(0.5, 0.5, 1, 8, 1).translate(0, 0.5, 0), mats[2], octs, boxSet, () => '#1c2230'));
+  keep(inst(new THREE.PlaneGeometry(0.5, 0.78).rotateY(Math.PI), new THREE.MeshStandardMaterial({ roughness: 0.8, side: THREE.DoubleSide, emissive: '#ffffff', emissiveIntensity: 0.08 }), crowd,
+    ([x, y, z, ry]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.set(R(0.9, 1.1), R(0.85, 1.15), 1); }, e => e[4]), 'medium');
   const ptSet = ([x, y, z, ry, s]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.setScalar(s); };
   const frondMat = new THREE.MeshStandardMaterial({ map: api.canvasTex(128, 256, paintFrond, false), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.75 });
   const trunkMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 });
@@ -692,12 +695,16 @@ function build(api) {
     part(new THREE.IcosahedronGeometry(1, 0).scale(6.5, 2.4, 6.5), '#2c5a2e', 0, 6.8, 0), part(new THREE.IcosahedronGeometry(1, 0).scale(4, 1.8, 4), '#35683a', 2.5, 7.8, 1)]);
   inst(rainGeo, trunkMat, rainTrees, ptSet, () => tc.setScalar(R(0.75, 1.05)));
   const stGeo = mergeGeometries([part(new THREE.CylinderGeometry(3.2, 1.6, 40, 8, 1, true).translate(0, 20, 0), '#6b4a7a'), part(new THREE.CylinderGeometry(12, 3.4, 5, 12, 1, true).translate(0, 41, 0), '#ff5fd8')]);
-  inst(stGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false }), supers, ([x, y, z, ry, s]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.set(1, s, 1); },
-    () => tc.setHSL(R(0.75, 0.95), 0.8, 0.6));
+  keep(inst(stGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false }), supers, ([x, y, z, ry, s]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.set(1, s, 1); },
+    () => tc.setHSL(R(0.75, 0.95), 0.8, 0.6)));
 
   const statics = new THREE.Mesh(mergeGeometries(vc), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75 }));
   statics.receiveShadow = true;
   world.add(statics);
+  const lattice = new THREE.Mesh(mergeGeometries(braces), statics.material);   // 10k triangles of 10 cm struts: none at 'low'
+  lattice.receiveShadow = true;
+  lattice.userData.minQuality = 'medium';
+  world.add(lattice);
   world.add(new THREE.Mesh(mergeGeometries(glow), new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false })));
 
   // glow sprites (fogged additive point cloud)

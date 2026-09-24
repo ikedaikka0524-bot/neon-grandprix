@@ -264,6 +264,7 @@ function build(api) {
     }
     const m = new THREE.Mesh(mergeGeometries(G), new THREE.MeshBasicMaterial({ vertexColors: true, fog: false }));
     m.renderOrder = -4;
+    m.userData.minQuality = 'medium';   // 12k triangles drawn in every view: none at 'low' (fog ends at 870 m there anyway)
     world.add(m);
   }
 

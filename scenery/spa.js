@@ -147,7 +147,7 @@ function build(api) {
       inMeadow.push([i0, i1, sg]);
     }
     const rail = mergeGeometries([new THREE.BoxGeometry(0.14, 1.3, 0.14).translate(0, 0.65, 0), new THREE.BoxGeometry(11.5, 0.1, 0.06).translate(0, 1.05, 0), new THREE.BoxGeometry(11.5, 0.1, 0.06).translate(0, 0.6, 0)]);
-    K.instanced(rail, new THREE.MeshStandardMaterial({ color: 0x7a5c40, roughness: 0.9 }), posts, { shadow: false });
+    for (const m of K.instanced(rail, new THREE.MeshStandardMaterial({ color: 0x7a5c40, roughness: 0.9 }), posts, { shadow: false })) m.userData.keepCount = true;   // a thinned fence shows gaps
     const cowGeo = mergeGeometries([
       new THREE.BoxGeometry(0.9, 0.85, 2).translate(0, 1.15, 0), new THREE.BoxGeometry(0.5, 0.5, 0.6).translate(0, 1.35, 1.25),
       ...[[-0.3, -0.7], [0.3, -0.7], [-0.3, 0.7], [0.3, 0.7]].map(([x, z]) => new THREE.BoxGeometry(0.18, 0.75, 0.18).translate(x, 0.37, z)),

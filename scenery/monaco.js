@@ -373,7 +373,7 @@ function build(api) {
     },
     vertexShader: WATER_VS, fragmentShader: WATER_FS, fog: true,
   });
-  const water = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000, 64, 64).rotateX(-Math.PI / 2), waterMat);
+  const water = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000, 8, 8).rotateX(-Math.PI / 2), waterMat);
   water.position.set(-150, WATER, 400);
   water.frustumCulled = false;
   world.add(water);
@@ -778,11 +778,14 @@ function build(api) {
   };
   const boxSet = ([x, y, z, ry, sx, sy, sz]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.set(sx, sy, sz); };
   const unitBox = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
-  inst(unitBox, facadeMat(facadeTex, 3.4, 3.2, 8, 8), oldB, boxSet, e => e[7]);
-  inst(unitBox, facadeMat(modernTex, 3.0, 3.1, 8, 8, { rough: 0.5, metal: 0.1 }), newB, boxSet, e => e[7]);
-  inst(new THREE.ConeGeometry(Math.SQRT1_2, 1, 4, 1).rotateY(Math.PI / 4).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true }), roofs, boxSet, e => e[7]);
+  // keepCount: world.js thins instanced scenery at lower quality; buildings carry merged parts (roof rooms, terraces,
+  // the tunnel block), and rows of lamps / seated crowds would show gaps
+  const keep = (m, k = true) => { if (m) m.userData.keepCount = k; };   // crowds: 'medium' (thinned only at low)
+  keep(inst(unitBox, facadeMat(facadeTex, 3.4, 3.2, 8, 8), oldB, boxSet, e => e[7]));
+  keep(inst(unitBox, facadeMat(modernTex, 3.0, 3.1, 8, 8, { rough: 0.5, metal: 0.1 }), newB, boxSet, e => e[7]));
+  keep(inst(new THREE.ConeGeometry(Math.SQRT1_2, 1, 4, 1).rotateY(Math.PI / 4).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true }), roofs, boxSet, e => e[7]));
   const ptSet = ([x, y, z, ry, s]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.setScalar(s); };
-  inst(new THREE.PlaneGeometry(0.5, 0.78).rotateY(Math.PI), new THREE.MeshStandardMaterial({ roughness: 0.8, side: THREE.DoubleSide }), crowd, ([x, y, z, ry]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.set(R(0.9, 1.1), R(0.85, 1.15), 1); }, e => e[4], false);
+  keep(inst(new THREE.PlaneGeometry(0.5, 0.78).rotateY(Math.PI), new THREE.MeshStandardMaterial({ roughness: 0.8, side: THREE.DoubleSide }), crowd, ([x, y, z, ry]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.set(R(0.9, 1.1), R(0.85, 1.15), 1); }, e => e[4], false), 'medium');
   const yMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.05 });
   const yGeos = [yachtGeo('#f7f7f4'), yachtGeo('#1b2a44'), yachtGeo('#5d6772')];
   yachts.forEach((list, v) => inst(yGeos[v], yMat, list, ptSet));
@@ -798,8 +801,8 @@ function build(api) {
   inst(pineGeo, trunkMat, pines, ptSet, () => tk.setScalar(R(0.8, 1.05)));
   const cypGeo = mergeGeometries([part(new THREE.CylinderGeometry(0.2, 0.25, 1.4, 5).translate(0, 0.7, 0), '#5b4636'), part(new THREE.IcosahedronGeometry(1, 0).scale(1.3, 5.2, 1.3), '#2f4a2a', 0, 5.8, 0)]);
   inst(cypGeo, trunkMat, cypress, ptSet, () => tk.setScalar(R(0.8, 1.1)));
-  inst(mergeGeometries([part(new THREE.CylinderGeometry(0.07, 0.11, 4.4, 6).translate(0, 2.2, 0), '#26332b'), part(new THREE.BoxGeometry(0.46, 0.62, 0.46), '#f3ecd0', 0, 4.5, 0),
-    part(new THREE.ConeGeometry(0.42, 0.4, 4).rotateY(Math.PI / 4), '#26332b', 0, 5.0, 0), part(new THREE.BoxGeometry(0.9, 0.08, 0.08), '#26332b', 0, 3.9, 0)]), trunkMat, lamps, ptSet);
+  keep(inst(mergeGeometries([part(new THREE.CylinderGeometry(0.07, 0.11, 4.4, 6).translate(0, 2.2, 0), '#26332b'), part(new THREE.BoxGeometry(0.46, 0.62, 0.46), '#f3ecd0', 0, 4.5, 0),
+    part(new THREE.ConeGeometry(0.42, 0.4, 4).rotateY(Math.PI / 4), '#26332b', 0, 5.0, 0), part(new THREE.BoxGeometry(0.9, 0.08, 0.08), '#26332b', 0, 3.9, 0)]), trunkMat, lamps, ptSet));
   inst(new THREE.IcosahedronGeometry(1.2, 0).scale(1, 0.7, 1).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true }), shrubs, ptSet, () => pick(['#4f7d3a', '#5d8a40', '#b0406a', '#447030']));
 
   // merged statics

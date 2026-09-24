@@ -310,7 +310,7 @@ function build(api) {
     },
     vertexShader: WATER_VS, fragmentShader: WATER_FS, fog: true,
   });
-  const water = new THREE.Mesh(new THREE.PlaneGeometry(7000, 7000, 56, 56).rotateX(-Math.PI / 2), waterMat);
+  const water = new THREE.Mesh(new THREE.PlaneGeometry(7000, 7000, 8, 8).rotateX(-Math.PI / 2), waterMat);
   water.position.set(0, WATER, 300);
   water.frustumCulled = false;
   world.add(water);
@@ -501,9 +501,12 @@ function build(api) {
   };
   const boxSet = ([x, y, z, ry, sx, sy, sz]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.set(sx, sy, sz); };
   const ptSet = ([x, y, z, ry, s]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.setScalar(s); };
-  inst(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), facadeMat(api.canvasTex(256, 256, paintBands), 3.0, 3.4, 8, 8), blocks, boxSet, e => e[7]);
-  inst(new THREE.PlaneGeometry(0.5, 0.78).rotateY(Math.PI), new THREE.MeshStandardMaterial({ roughness: 0.8, side: THREE.DoubleSide }), crowd,
-    ([x, y, z, ry]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.set(R(0.9, 1.1), R(0.85, 1.15), 1); }, e => e[4], false);
+  // keepCount: world.js thins instanced scenery at lower quality; the blocks include the hotel over the track (its
+  // gridshell is a separate mesh), seated crowds would show gaps
+  const keep = (m, k = true) => { if (m) m.userData.keepCount = k; };   // crowds: 'medium' (thinned only at low)
+  keep(inst(new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0), facadeMat(api.canvasTex(256, 256, paintBands), 3.0, 3.4, 8, 8), blocks, boxSet, e => e[7]));
+  keep(inst(new THREE.PlaneGeometry(0.5, 0.78).rotateY(Math.PI), new THREE.MeshStandardMaterial({ roughness: 0.8, side: THREE.DoubleSide }), crowd,
+    ([x, y, z, ry]) => { dm.position.set(x, y, z); dm.rotation.set(0, ry, 0); dm.scale.set(R(0.9, 1.1), R(0.85, 1.15), 1); }, e => e[4], false), 'medium');
   const yMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.05 });
   [yachtGeo('#f7f7f4'), yachtGeo('#23324d')].forEach((g, v) => inst(g, yMat, yachts[v], ptSet));
   const frondMat = new THREE.MeshStandardMaterial({ map: api.canvasTex(128, 256, paintFrond, false), alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.75 });

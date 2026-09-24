@@ -444,7 +444,9 @@ export async function buildWorld(ctx, def) {
 // Performance (generic: runs after any theme / scenery build)
 // ======================================================================================
 const CELL = 500;   // m; smaller cells cull more triangles but cost draw calls (dear on phones)
+const FAR_CAP = 1500;   // m of fog below 'high': the real-circuit sceneries see up to 3.2 km, which costs ground tiles + cells
 const hash01 = (x, z) => { const s = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453; return s - Math.floor(s); };
+const triCount = g => (g.index ? g.index.count : g.attributes.position.count) / 3;
 
 // The ground sheet -> 4x4 tiles sharing its vertex buffers (no seams), so off-screen and fogged-out ground is culled.
 // (~400 m tiles on the big real circuits: -20% triangles at 'low' but +15 draw calls at 'high' - no clear win, not done)
@@ -468,13 +470,89 @@ function splitGround(ground, world, tiles = 4) {
   world.remove(ground);
 }
 
+// Below 'high' nothing thinned casts shadows, so all cells of one geometry + material (kit cells, near / far sets, the
+// CELL chunks below) are merged again into COARSE cells: about half the draw calls for the same instances, a few more
+// triangles. The fine cells stay for 'high', where the shadow pass wants them small. setQuality shows one group.
+// (Never-thinned sets are left fine: batched, monaco / marina bay drew 5 % more triangles for 10 % fewer calls.)
+const COARSE = 1000;
+function batchCoarse(world, thin) {
+  const fine = new THREE.Group(), coarse = new THREE.Group(), sets = new Map(), M = new THREE.Matrix4();
+  for (const m of thin) {
+    if (m.parent !== world || Array.isArray(m.material)) continue;
+    const k = `${m.geometry.id}:${m.material.id}:${m.renderOrder}:${m.userData.keepCount}`;
+    (sets.get(k) || sets.set(k, []).get(k)).push(m);
+  }
+  for (const list of sets.values()) {
+    const cells = new Map(), colored = list.some(m => m.instanceColor);
+    for (const m of list) {
+      m.updateMatrix();
+      m.userData.h.forEach((h, i) => {
+        M.fromArray(m.instanceMatrix.array, i * 16).premultiply(m.matrix);
+        const key = Math.floor(M.elements[12] / COARSE) * 65536 + Math.floor(M.elements[14] / COARSE);
+        (cells.get(key) || cells.set(key, []).get(key)).push({ h, e: M.toArray(), c: m.instanceColor?.array.slice(i * 3, i * 3 + 3) ?? [1, 1, 1] });
+      });
+    }
+    if (cells.size >= list.length) continue;   // no fewer draws
+    for (const items of cells.values()) {
+      items.sort((a, b) => a.h - b.h);
+      const c = new THREE.InstancedMesh(list[0].geometry, list[0].material, items.length);
+      if (colored) c.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(items.length * 3), 3);
+      items.forEach((it, j) => { c.instanceMatrix.array.set(it.e, j * 16); if (colored) c.instanceColor.array.set(it.c, j * 3); });
+      c.receiveShadow = list[0].receiveShadow; c.renderOrder = list[0].renderOrder;
+      c.userData = { h: Float32Array.from(items, it => it.h), cast: false, keepCount: list[0].userData.keepCount };
+      c.computeBoundingSphere();
+      coarse.add(c);
+      thin.push(c);
+    }
+    for (const m of list) fine.add(m);
+  }
+  coarse.visible = false;
+  world.add(fine, coarse);
+  return { fine, coarse };
+}
+
+// Big merged statics (a whole town or a lap of light gantries baked into one mesh) -> COARSE chunks, so the fog, the frustum
+// and the shadow pass cull them like everything else. Only non-indexed meshes straight under the world at its origin
+// (moving props never are; the indexed ground is splitGround's).
+function splitStatics(world) {
+  for (const m of [...world.children]) {
+    const g = m.geometry;
+    if (!m.isMesh || m.isInstancedMesh || !m.frustumCulled || g.index || g.groups.length || Array.isArray(m.material) || triCount(g) < 6000
+      || m.position.lengthSq() || m.quaternion.w !== 1 || m.scale.x !== 1 || m.scale.y !== 1 || m.scale.z !== 1 || m.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender
+      || Object.keys(g.morphAttributes).length || Object.values(g.attributes).some(a => a.isInterleavedBufferAttribute)) continue;
+    if (!g.boundingSphere) g.computeBoundingSphere();
+    if (g.boundingSphere.radius < CELL) continue;
+    const P = g.attributes.position.array, cells = new Map();
+    for (let t = 0; t < P.length / 9; t++) {
+      const key = Math.floor((P[t * 9] + P[t * 9 + 3] + P[t * 9 + 6]) / 3 / COARSE) * 65536 + Math.floor((P[t * 9 + 2] + P[t * 9 + 5] + P[t * 9 + 8]) / 3 / COARSE);
+      (cells.get(key) || cells.set(key, []).get(key)).push(t);
+    }
+    if (cells.size < 2) continue;
+    for (const tris of cells.values()) {
+      const cg = new THREE.BufferGeometry();
+      for (const [k, a] of Object.entries(g.attributes)) {
+        const s = a.itemSize * 3, out = new a.array.constructor(tris.length * s);
+        tris.forEach((t, j) => out.set(a.array.subarray(t * s, t * s + s), j * s));
+        cg.setAttribute(k, new THREE.BufferAttribute(out, a.itemSize, a.normalized));
+      }
+      const c = new THREE.Mesh(cg, m.material);
+      c.castShadow = m.castShadow; c.receiveShadow = m.receiveShadow; c.renderOrder = m.renderOrder; c.name = m.name; c.userData = { ...m.userData };
+      world.add(c);
+    }
+    m.removeFromParent();
+  }
+}
+
 // Static instanced scenery is split into CELL-sized chunks (culled per chunk in the main and the shadow pass) and sorted
 // by a position hash, so lowering `count` thins it evenly; parts sharing a position (trunk + crown) go together.
 // Left alone: animated meshes (an updater rewrites their matrices), frustumCulled = false, tiny sets.
-// userData.keepCount = true: split but never thinned (things that read as a sequence: posts, streetlights).
+// userData.keepCount = true: split but never thinned (things that read as a sequence: posts, streetlights);
+// 'medium': full down to 'medium', thinned at 'low' (seated crowds). Kept sets of small parts (< 0.8 m: posts) cast
+// shadows only at 'high'.
+// userData.minQuality = 'medium' | 'high' on any object: hidden below that level (heavy far-off decoration).
 // Returns { setQuality({ level, inst, far }), cull(camera) } for game.js.
 function tuneWorld(ctx, world, updaters) {
-  const { scene, env } = ctx, all = [], thin = [], points = [], cullable = [];
+  const { scene, env } = ctx, all = [], thin = [], tiny = [], points = [], cullable = [], extras = [], LV = ['low', 'medium', 'high'];
   world.traverse(o => { if (o.isInstancedMesh) all.push(o); });
   const v0 = all.map(m => m.instanceMatrix.version);
   for (const f of updaters) { try { f(0, 0); } catch { /* reported by the race loop */ } }
@@ -482,8 +560,9 @@ function tuneWorld(ctx, world, updaters) {
     if (m.instanceMatrix.version !== v0[j] || !m.frustumCulled || m.count < 16 || !m.parent
       || Object.values(m.geometry.attributes).some(a => a.isInstancedBufferAttribute)) return;
     const n = m.count, M = m.instanceMatrix.array.slice(0, n * 16), C = m.instanceColor?.array.slice(0, n * 3), groups = new Map();
+    const small = n < 200 && n * triCount(m.geometry) < 15000;   // a few hundred 150-triangle palms still want culling
     for (let i = 0; i < n; i++) {
-      const x = M[i * 16 + 12], z = M[i * 16 + 14], key = n < 200 ? 0 : Math.floor(x / CELL) * 65536 + Math.floor(z / CELL);
+      const x = M[i * 16 + 12], z = M[i * 16 + 14], key = small ? 0 : Math.floor(x / CELL) * 65536 + Math.floor(z / CELL);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push({ h: hash01(x, z), i });
     }
@@ -507,14 +586,19 @@ function tuneWorld(ctx, world, updaters) {
       c.computeBoundingSphere();
       c.userData.h = Float32Array.from(list, e => e.h);
       c.userData.cast = c.castShadow;
-      if (!c.userData.keepCount) thin.push(c);
+      if (c.userData.keepCount !== true) thin.push(c);
+      else if (c.castShadow) { c.geometry.computeBoundingSphere(); if (c.geometry.boundingSphere.radius < 0.8) tiny.push(c); }
     }
     if (groups.size > 1) m.removeFromParent();
   });
+  const lod = batchCoarse(world, thin);
+  splitStatics(world);
   world.updateMatrixWorld(true);
   world.traverse(o => {
     if (o.isPointLight) points.push(o);
-    if (!(o.isMesh || o.isPoints || o.isLine) || !o.frustumCulled) return;
+    if (o.userData.minQuality) extras.push(o);   // decoration shown from that level up
+    // unfogged materials (pre-hazed skylines, far clouds, a plane in the sky) stay visible beyond the fog: never culled
+    if (!(o.isMesh || o.isPoints || o.isLine) || !o.frustumCulled || ![].concat(o.material).some(m => m.fog)) return;
     if (o.isInstancedMesh) { if (!o.boundingSphere) o.computeBoundingSphere(); } else if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
     cullable.push(o);
   });
@@ -532,14 +616,18 @@ function tuneWorld(ctx, world, updaters) {
   return {
     setQuality({ level, inst, far }) {
       for (const m of thin) {
-        const h = m.userData.h;
+        const h = m.userData.h, lim = m.userData.keepCount && level !== 'low' ? 2 : inst;
         let n = 0;
-        while (n < h.length && h[n] < inst) n++;
+        while (n < h.length && h[n] < lim) n++;
         m.count = n;
         m.castShadow = m.userData.cast && level === 'high';   // lower levels: only buildings / props / cars cast
       }
-      if (scene.fog) { scene.fog.near = fog0.near * far; scene.fog.far = fog0.far * far; }
-      for (const [u, [n, f]] of ownFog) { if (u.fogNear) u.fogNear.value = n * far; u.fogFar.value = f * far; }
+      for (const m of tiny) m.castShadow = level === 'high';   // posts: 2-texel shadows in the 1024 map, a third of monaco's shadow pass
+      lod.fine.visible = level === 'high'; lod.coarse.visible = !lod.fine.visible;
+      for (const o of extras) { o.visible = LV.indexOf(level) >= LV.indexOf(o.userData.minQuality); o.userData.farOff = false; }   // cull() re-checks shown ones
+      const k = far * (level === 'high' ? 1 : Math.min(1, FAR_CAP / fog0.far));   // near + far together: same fog curve, shorter
+      if (scene.fog) { scene.fog.near = fog0.near * k; scene.fog.far = fog0.far * k; }
+      for (const [u, [n, f]] of ownFog) { if (u.fogNear) u.fogNear.value = n * k; u.fogFar.value = f * k; }
       for (const l of points) l.visible = level !== 'low';   // city neon spill lights; the glowing materials stay
       for (const [t, a] of aniso) { const want = level === 'low' ? 2 : a; if (t.anisotropy !== want) { t.anisotropy = want; t.needsUpdate = true; } }
     },
@@ -609,7 +697,10 @@ function buildBarriers({ THREE, world, track, env, night, rnd, col }) {
     });
     const railMat = new THREE.MeshStandardMaterial({ map: tex, metalness: 0.6, roughness: 0.35, side: THREE.DoubleSide });
     for (const sg of [1, -1]) add(wall(sg * L, 0.42, 0.86, 4), railMat);
-    along(new THREE.BoxGeometry(0.16, 1.1, 0.16).translate(0, 0.55, 0), new THREE.MeshStandardMaterial({ color: 0x5d636d, metalness: 0.5, roughness: 0.5 }), 4,
+    const post = new THREE.BoxGeometry(0.16, 1.1, 0.16).translate(0, 0.55, 0);
+    post.setIndex([...post.index.array.slice(0, 12), ...post.index.array.slice(24)]);   // no top / bottom: under the rail / in the ground
+    post.clearGroups();
+    along(post, new THREE.MeshStandardMaterial({ color: 0x5d636d, metalness: 0.5, roughness: 0.5 }), 4,
       (d, s, sg) => { at(d, s, sg, L + 0.14, -0.25); });
   } else if (style === 'neon') {
     const dark = new THREE.MeshStandardMaterial({ color: 0x15171f, metalness: 0.4, roughness: 0.4, side: THREE.DoubleSide });
@@ -758,6 +849,7 @@ function grandstand(len, rnd) {
     n++;
   }
   crowd.count = n;
+  crowd.userData.keepCount = 'medium';   // a thinned crowd reads as empty seats: only at low
   g.add(crowd);
   const roofMat = new THREE.MeshStandardMaterial({ color: 0xe8ecf2, roughness: 0.5, metalness: 0.3 });
   const roof = new THREE.Mesh(new THREE.BoxGeometry(len + 2, 0.25, 9.5), roofMat);

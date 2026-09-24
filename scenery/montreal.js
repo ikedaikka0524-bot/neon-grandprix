@@ -201,6 +201,7 @@ export function kit(api) {
       m.setMatrixAt(i, M.compose(a, Q.setFromUnitVectors(UP, V.normalize()), SC.set(t, len, t)));
     });
     m.castShadow = shadow;
+    m.userData.keepCount = true;   // lattices (dome, truss): world.js must not thin them at lower quality
     world.add(m);
     return m;
   }
@@ -293,11 +294,11 @@ export function kit(api) {
     g.fillStyle = '#ffffff'; g.beginPath(); g.roundRect(4, 20, 24, 44, 8); g.fill();
     g.fillStyle = '#4a3a30'; g.beginPath(); g.arc(16, 12, 9, 0, TAU); g.fill();
   }, false);
-  function flushCrowd() {
-    inst(new THREE.PlaneGeometry(0.5, 0.8).translate(0, 0.4, 0),
-      new THREE.MeshStandardMaterial({ map: personTex, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.9 }), crowd.splice(0), false);
+  function flushCrowd() {   // keepCount: a thinned crowd reads as empty seats (so only at low)
+    for (const m of [inst(new THREE.PlaneGeometry(0.5, 0.8).translate(0, 0.4, 0),
+      new THREE.MeshStandardMaterial({ map: personTex, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.9 }), crowd.splice(0), false),
     inst(mergeGeometries([new THREE.ConeGeometry(1.1, 0.45, 8, 1, true).translate(0, 2.05, 0), new THREE.CylinderGeometry(0.03, 0.03, 2, 3, 1, true).translate(0, 1, 0)]),
-      new THREE.MeshStandardMaterial({ roughness: 0.7, side: THREE.DoubleSide }), brolly.splice(0));
+      new THREE.MeshStandardMaterial({ roughness: 0.7, side: THREE.DoubleSide }), brolly.splice(0))]) if (m) m.userData.keepCount = 'medium';
   }
 
   // trees: rows [x, z, kind, scale, color]; one instanced mesh per kind (trunk baked in, darker by vertex colour)
@@ -316,7 +317,7 @@ export function kit(api) {
       uSky: { value: new THREE.Color(e.sky.top) }, uHor: { value: new THREE.Color(hor) }, uFres: { value: fres },
       uSun: { value: new THREE.Vector3(...e.sun.dir).normalize() }, uSunCol: { value: new THREE.Color(e.sun.color) }, uFlow: { value: new THREE.Vector2(...flow) },
     }]);
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size, Math.ceil(size / 125), Math.ceil(size / 125)).rotateX(-Math.PI / 2), new THREE.ShaderMaterial({ uniforms: uni, vertexShader: WATER_VS, fragmentShader: WATER_FS, fog: true }));
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size, 8, 8).rotateX(-Math.PI / 2), new THREE.ShaderMaterial({ uniforms: uni, vertexShader: WATER_VS, fragmentShader: WATER_FS, fog: true }));
     m.position.set(x, y, z);
     world.add(m);
     api.onUpdate(dt => { uni.uTime.value += dt; });
@@ -547,7 +548,7 @@ function build(api) {
       const [x, z] = basinAt(t, -40.5 + l * 13.5);
       buoys.push([x, WATER + 0.1, z, 0, 0.35, 0.35, 0.35, (Math.round(t * bL / 9) % 10) ? '#f4f4f0' : '#ff6a13']);
     }
-    K.inst(new THREE.OctahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ roughness: 0.5 }), buoys, false);
+    K.inst(new THREE.OctahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ roughness: 0.5 }), buoys, false).userData.keepCount = true;   // lane lines
     let [x, z] = basinAt(-0.035, 0);
     K.box('solid', 9, 14, 9, x, G(x, z) + 7, z, bry, '#e7e9ec');
     K.box('glass', 10, 3.2, 10, x, G(x, z) + 15.6, z, bry, '#2f4d63');

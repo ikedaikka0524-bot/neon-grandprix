@@ -208,7 +208,7 @@ export function kit(api) {
   }
 
   // ---- chunked instancing (500 m cells, so distant groups are frustum-culled); items: { x, y, z, ry, rx, rz, sx, sy, sz, c }
-  function inst(geo, mat, items, { cell = 500, shadow = true } = {}) {
+  function inst(geo, mat, items, { cell = 500, shadow = true, keep = false } = {}) {   // keep: never thinned by world.js
     const groups = new Map(), col = new THREE.Color();
     for (const it of items) { const k = `${Math.floor(it.x / cell)},${Math.floor(it.z / cell)}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(it); }
     for (const list of groups.values()) {
@@ -220,6 +220,7 @@ export function kit(api) {
         if (it.c) m.setColorAt(n, col.set(it.c));
       });
       m.castShadow = shadow; m.receiveShadow = true;
+      if (keep) m.userData.keepCount = true;
       world.add(m);
     }
   }
@@ -283,7 +284,7 @@ export function kit(api) {
         transformed.y += sin(uT * 4.3 - position.x * 1.9 + ph) * 0.05 * position.x;`);
     };
     for (const f of list) add('metal', new THREE.CylinderGeometry(0.03, 0.03, f.h ?? 2.2, 4), '#cfd3d8', f.x, f.y + (f.h ?? 2.2) / 2, f.z);
-    inst(cloth, mat, list.map(f => ({ x: f.x, y: f.y + (f.h ?? 2.2), z: f.z, ry: rnd() * TAU, c: f.c })), { shadow: false });
+    inst(cloth, mat, list.map(f => ({ x: f.x, y: f.y + (f.h ?? 2.2), z: f.z, ry: rnd() * TAU, c: f.c })), { shadow: false, keep: true });   // the poles are merged: thinned cloth leaves bare poles
     api.onUpdate(dt => { flagT.value += dt; });
   }
 

@@ -420,9 +420,12 @@ function build(api) {
         break;
       }
     }
-    inst(new THREE.CylinderGeometry(0.28, 0.45, 30, 6).translate(0, 15, 0), new THREE.MeshStandardMaterial({ color: 0x8a8d93, metalness: 0.6, roughness: 0.4 }), poles);
-    inst(new THREE.BoxGeometry(5.2, 2.6, 0.8).translate(0, 0, 0.3).rotateX(0.45), new THREE.MeshStandardMaterial({ color: 0x50545b, roughness: 0.5 }), heads, false);
-    inst(new THREE.PlaneGeometry(4.8, 2.2).rotateY(Math.PI).rotateX(0.45).translate(0, 0.05, -0.18), new THREE.MeshBasicMaterial({ color: 0xfff7e8, toneMapped: false }), heads, false);
+    // keepCount: world.js must not thin them at lower quality (the glow sprites below would float without their towers)
+    for (const m of [
+      inst(new THREE.CylinderGeometry(0.28, 0.45, 30, 6).translate(0, 15, 0), new THREE.MeshStandardMaterial({ color: 0x8a8d93, metalness: 0.6, roughness: 0.4 }), poles),
+      inst(new THREE.BoxGeometry(5.2, 2.6, 0.8).translate(0, 0, 0.3).rotateX(0.45), new THREE.MeshStandardMaterial({ color: 0x50545b, roughness: 0.5 }), heads, false),
+      inst(new THREE.PlaneGeometry(4.8, 2.2).rotateY(Math.PI).rotateX(0.45).translate(0, 0.05, -0.18), new THREE.MeshBasicMaterial({ color: 0xfff7e8, toneMapped: false }), heads, false),
+    ]) m.userData.keepCount = true;
     K.points(glows, { size: 26, tex: K.glowTex(), opacity: 0.85 });
   }
   // a few real lights: the grid, the T1 braking zone, the tower plaza
