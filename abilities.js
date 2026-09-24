@@ -13,11 +13,16 @@ const MAGNET_DOCK = 16;   // m/s^2: the pull closes in no faster than this much 
 const DOMAIN_R = 45, DOMAIN_BOOST = 0.2, DOMAIN_MAX_SLOW = 0.6;
 const ROBOT_T = 0.35, ROBOT_BOOST = 1.5;   // robotdash: transform time each way, boost after changing back
 const KNOCK = { side: 12, spin: 0.4, keep: 0.7, again: 0.6 };   // robot hit: sideways m/s, spin s, speed kept, s before the same car again
+// hellchain (m, s): pick a car ahead within range, snap when this close; tow spring point behind it, one lane beside it;
+// chain flight time; max slow on the target; tow spring 1/s^2 and its cap (x power) m/s^2
+const HELL = { range: 80, snap: 6, follow: 7, lane: 3, hook: 0.2, maxDrag: 0.6, k: 1.5, pull: 60 };
+const HELL_SLING = { dur: 1.5, pow: 0.45 }, HELL_MISS = { dur: 1, pow: 0.15 };   // after the snap / nobody ahead or a shrugged-off chain
+const LINKS = 240, LINK_PITCH = 0.36, CHAIN_SEG = 24;
 const CURB_CURV = 1 / 130, CURB_SPAN = 14;   // world.js lays curbs where |curv| exceeds this within ± this many samples
 const COLOR = {
   boost: '#5fe3ff', nitro: '#ff9a3c', oil: '#b6ff3b', shield: '#5ef1ff',
   warp: '#6fe0ff', timeslow: '#c77dff', phase: '#ff8fd8', thunderbolt: '#ffe14d',
-  magnet: '#ff4d6a', domain: '#b36bff', downforce: '#56c8ff', robotdash: '#ffb347',
+  magnet: '#ff4d6a', domain: '#b36bff', downforce: '#56c8ff', robotdash: '#ffb347', hellchain: '#ff5a1f',
 };
 const pal = (...h) => h.map(x => new THREE.Color(x));
 const PAL = {
@@ -32,6 +37,7 @@ const PAL = {
   domain: pal('#f3e0ff', '#c77dff', '#9b3dff', '#6a1fd0', '#3b1466'),
   downforce: pal('#ffffff', '#bff0ff', '#56c8ff', '#2a7bff'),
   robotdash: pal('#ffffff', '#fff1c9', '#ffb347', '#ff6b1a'),
+  hellchain: pal('#fff2b0', '#ffb347', '#ff6a1f', '#ff2a10', '#b3120a'),
   oil: pal('#0b0a10', '#17131f', '#2b2438'),
   smoke: pal('#8a8f99', '#6b707a', '#a2a7b0'),
   spark: pal('#fff6b0', '#ffd23f', '#ffffff'),
@@ -48,6 +54,8 @@ const smooth01 = k => { k = clamp(k, 0, 1); return k * k * (3 - 2 * k); };
 const isHuman = c => c.control === 'p1' || c.control === 'p2';
 // robot form (incl. both transforms): immune, not slowed by hits, knocks others away
 const isRobot = c => c.ability?.id === 'robotdash' && c.ability.active > 0 && c.ability.t < c.ability.robotDur + ROBOT_T;
+// shield / phase / robot form shrug a hellchain off
+const chainProof = c => isRobot(c) || (c.ability?.active > 0 && (c.ability.id === 'shield' || c.ability.id === 'phase'));
 const flash = (race, text, color) => race.hud?.flash?.(text, color);
 const who = (race, car) => (race.mode === 'split' ? (car.control === 'p1' ? 'P1 ' : 'P2 ') : '');
 const _v = new THREE.Vector3(), _w = new THREE.Vector3();
@@ -617,8 +625,8 @@ function carVisuals(race, S, car, dt) {
   const vx = car.vel ? car.vel.x : sh * car.speed, vz = car.vel ? car.vel.z : ch * car.speed;
   const world = (p, out = _v) => out.set(car.pos.x + p.z * sh + p.x * ch, car.pos.y + p.y, car.pos.z + p.z * ch - p.x * sh);
 
-  if (a.id === 'boost' || a.id === 'nitro') {
-    const nitro = a.id === 'nitro', g = flames(S, fx, nitro), on = act === a.id;
+  if (a.id === 'boost' || a.id === 'nitro' || a.id === 'hellchain') {
+    const nitro = a.id !== 'boost', g = flames(S, fx, nitro), on = act === a.id && !a.chained;
     g.visible = on;
     if (on) {
       const len = (nitro ? 1.8 : 1.1) * Math.min(1, a.t * 6) * (a.active < 0.3 ? a.active / 0.3 : 1);
@@ -760,6 +768,8 @@ function carVisuals(race, S, car, dt) {
     }
   }
 
+  if (a.id === 'hellchain' && (a.chained || a.chainFx)) chainVisuals(S, car, a, dt);
+
   if (car.spin > 0 && Math.random() < dt * 25) {   // dizzy sparkles
     const th = t * 9 + rnd(-0.3, 0.3);
     world(_w.set(Math.cos(th) * 0.9, fx.box.max.y + 0.5, Math.sin(th) * 0.9));
@@ -769,6 +779,7 @@ function carVisuals(race, S, car, dt) {
 
 // ---------- effects ----------
 function applyOwn(race, car, a) {
+  if (a.chained) return chainTow(race, car, a);
   const m = car.mods, tg = a.id === 'magnet' ? a.target : null, gap = tg ? magnetGap(race, car, tg) : 0;
   if (tg && (tg.finished || tg._?.left || gap <= MAGNET_CATCH)) {
     a.active = 0;   // caught up (or overtook / target gone): the pull ends
@@ -777,7 +788,7 @@ function applyOwn(race, car, a) {
   if (!m) return;
   // dock behind the target instead of ramming it at +45%: no pull while closing in faster than it could brake off by then
   if (tg && car.speed > Math.max(0, tg.speed || 0) + Math.sqrt(2 * MAGNET_DOCK * (gap - MAGNET_CATCH))) return;
-  if (a.id === 'boost' || a.id === 'nitro' || a.id === 'magnet') { m.speedMul += a.power; m.accelMul += a.power; }
+  if (a.id === 'boost' || a.id === 'nitro' || a.id === 'magnet' || a.id === 'hellchain') { m.speedMul += a.power; m.accelMul += a.power; }
   else if (a.id === 'shield') m.invulnerable = true;
   else if (a.id === 'phase') { m.noCollide = true; m.noOffroadPenalty = true; m.speedMul += a.power; }
   else if (a.id === 'thunderbolt') { m.speedMul += THUNDER_BOOST; m.accelMul += THUNDER_BOOST; }   // a.power = victim's spin
@@ -793,7 +804,7 @@ function endFx(S, car) {
   const a = car.ability, p = _w.set(car.pos.x, car.pos.y + 0.8, car.pos.z);
   if (a.id === 'shield') burst(S.glow, p, 40, PAL.shield, 8, 0.5, 0.45, 0.05);
   else if (a.id === 'phase') { setPhase(car, false); burst(S.glow, p, 30, PAL.phase, 5, 0.6, 0.4, 0.05); }
-  else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
+  else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash', 'hellchain'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
   else burst(S.smoke, p, 10, PAL.smoke, 2, 0.8, 0.5, 1.4, -0.5, 1.5, 0.25);
 }
 
@@ -942,12 +953,12 @@ function drawnProgress(tr, c) {
 }
 const magnetGap = (race, car, o) => (drawnProgress(race.track, o) - drawnProgress(race.track, car)) * (race.track?.length || 0);
 // closest car ahead still racing, farther than the catch distance (one already that close is no use) and within range
-function magnetTarget(race, car) {
-  let best = null, bg = MAGNET_RANGE;
+function magnetTarget(race, car, min = MAGNET_CATCH, range = MAGNET_RANGE) {
+  let best = null, bg = range;
   for (const c of race.cars) {
     if (c === car || c.finished || c._?.left) continue;
     const g = magnetGap(race, car, c);
-    if (g > MAGNET_CATCH && g <= bg) { bg = g; best = c; }
+    if (g > min && g <= bg) { bg = g; best = c; }
   }
   return best;
 }
@@ -1000,6 +1011,8 @@ const boltMat = (S, color) => new THREE.MeshBasicMaterial({
 // whole-viewport flash for a local player (bottom half in split screen for P2): thunder victim by default
 const THUNDER_SCREEN = ['radial-gradient(ellipse at 50% 20%, rgba(255,255,255,0.9), rgba(160,215,255,0.6) 50%, rgba(60,110,255,0.45) 100%)',
   [{ opacity: 1 }, { opacity: 0.1, offset: 0.2 }, { opacity: 0.85, offset: 0.35 }, { opacity: 0 }], 450];
+const HELL_SCREEN = ['radial-gradient(ellipse at center, rgba(255,120,30,0) 40%, rgba(255,70,10,0.45) 75%, rgba(170,10,0,0.75) 100%)',
+  [{ opacity: 0 }, { opacity: 1, offset: 0.12 }, { opacity: 0.5, offset: 0.4 }, { opacity: 0 }], 700];
 const DOMAIN_SCREEN = ['radial-gradient(ellipse at center, rgba(215,160,255,0.55), rgba(90,20,170,0.6) 55%, rgba(20,0,40,0.9) 100%)',
   [{ opacity: 0 }, { opacity: 1, offset: 0.15 }, { opacity: 0.6, offset: 0.5 }, { opacity: 0 }], 900];
 function screenFlash(race, car, [bg, frames, ms] = THUNDER_SCREEN) {
@@ -1112,6 +1125,134 @@ function spawnDomain(race, S, owner, at, dur, pow) {
   });
 }
 
+// ---------- hellchain ----------
+const _cA = new THREE.Vector3(), _cB = new THREE.Vector3(), _Z = new THREE.Vector3(0, 0, 1), _one = new THREE.Vector3(1, 1, 1);
+const _q = new THREE.Quaternion(), _roll = new THREE.Quaternion().setFromAxisAngle(_Z, Math.PI / 2), _m = new THREE.Matrix4(), _c = new THREE.Color();
+const HEAT = pal('#8a1606', '#ffc861');
+// the owner's nose -> the target's tail, sagging and rattling. Abilities run before physics: the ends are put where the
+// cars will be drawn this frame (pos + vel dt). at(s) reuses _cA / _cB: use one curve before asking for the next.
+function chainCurve(car, tg, dt, t) {
+  for (const [c, P, k] of [[car, _cA, 1.95], [tg, _cB, -1.95]]) {
+    P.set(c.pos.x + Math.sin(c.heading) * k + (c.vel?.x || 0) * dt, c.pos.y + 0.62, c.pos.z + Math.cos(c.heading) * k + (c.vel?.z || 0) * dt);
+  }
+  const len = _cA.distanceTo(_cB), sag = clamp(len * 0.02, 0.1, 0.45);
+  return { len, at: (s, out) => { out.lerpVectors(_cA, _cB, s).y -= (4 * sag + 0.5 * Math.sin(s * 14 - t * 20)) * s * (1 - s); return out; } };
+}
+
+function chainMeshes(S) {
+  S.geo.link ||= new THREE.TorusGeometry(0.13, 0.04, 6, 12).scale(1, 1.75, 1).rotateX(Math.PI / 2);   // oval link along Z
+  S.chainMat ||= new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#ff3408', emissiveIntensity: 1.6, metalness: 0.4, roughness: 0.45 });
+  const links = new THREE.InstancedMesh(S.geo.link, S.chainMat, LINKS);
+  links.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  links.setColorAt(0, HEAT[0]);
+  links.frustumCulled = false;
+  links.count = 0;
+  const glow = new THREE.Mesh(new THREE.BufferGeometry(), boltMat(S, COLOR.hellchain));
+  glow.frustumCulled = false;
+  glow.renderOrder = 22;
+  const pts = Array.from({ length: CHAIN_SEG + 1 }, () => new THREE.Vector3());
+  S.root.add(links, glow);
+  return { links, glow, pts, segs: pts.slice(1).map((p, i) => [pts[i], p, 0.6]) };
+}
+
+// burning chain: links (alternate ones turned 90 deg), a heat-glow ribbon, flames along it, sparks where it bites
+function chainVisuals(S, car, a, dt) {
+  const C = a.chainFx ||= chainMeshes(S), tg = a.chained ? a.target : null;
+  C.links.visible = C.glow.visible = !!tg?.pos;
+  if (!tg?.pos) return;
+  const t = S.time, { len, at } = chainCurve(car, tg, dt, t), reach = Math.min(1, a.t / HELL.hook);   // it flies out first
+  const pitch = Math.max(LINK_PITCH, len / LINKS), n = Math.min(LINKS, Math.floor(len * reach / pitch));
+  for (let i = 0; i < n; i++) {
+    const s = (i + 0.5) * pitch / Math.max(len, 1e-3);
+    _q.setFromUnitVectors(_Z, _d.subVectors(at(s + 0.01, _a), at(s - 0.01, _b)).normalize());
+    if (i & 1) _q.multiply(_roll);
+    C.links.setMatrixAt(i, _m.compose(at(s, _v), _q, _one));
+    C.links.setColorAt(i, _c.lerpColors(HEAT[0], HEAT[1], 0.5 + 0.5 * Math.sin(s * len * 0.8 - t * 14 + (i & 3))));
+  }
+  C.links.count = n;
+  C.links.instanceMatrix.needsUpdate = true;
+  if (C.links.instanceColor) C.links.instanceColor.needsUpdate = true;
+  S.chainMat.emissiveIntensity = 1.4 + 0.5 * Math.sin(t * 17);
+  C.pts.forEach((p, j) => at(j / CHAIN_SEG * reach, p));
+  C.segs.forEach((g, j) => { g[2] = 0.5 + 0.2 * Math.sin(t * 25 + j); });
+  ribbons(C.segs, C.glow.geometry);
+  C.glow.material.opacity = 0.55 + 0.3 * Math.sin(t * 23);
+  const vx = ((car.vel?.x || 0) + (tg.vel?.x || 0)) / 2, vz = ((car.vel?.z || 0) + (tg.vel?.z || 0)) / 2;
+  for (let k = Math.min(40, Math.floor(dt * (30 + len * 3) + Math.random())); k > 0; k--) {   // flames licking up off it
+    const p = at(Math.random() * reach, _v);
+    S.glow.emit(p.x + rnd(-0.15, 0.15), p.y, p.z + rnd(-0.15, 0.15), vx * 0.9 + rnd(-1, 1), rnd(1, 3.5), vz * 0.9 + rnd(-1, 1), pick(PAL.hellchain), rnd(0.25, 0.5), 0.55, 0.1, -2, 1.5);
+  }
+  if (Math.random() < dt * 10) { const p = at(Math.random() * reach, _v); S.smoke.emit(p.x, p.y + 0.3, p.z, vx * 0.8, 1.2, vz * 0.8, pick(PAL.smoke), 0.8, 0.4, 1.4, -0.4, 1.5, 0.2); }
+  const tip = reach < 1 ? at(reach, _w) : _cB;
+  for (const P of [_cA, tip]) {
+    for (let k = Math.floor(dt * 35 + Math.random()); k > 0; k--) S.glow.emit(P.x, P.y, P.z, vx + rnd(-4, 4), rnd(1, 4), vz + rnd(-4, 4), pick(PAL.spark), rnd(0.2, 0.4), 0.3, 0.05, 12, 0.5);
+  }
+  if (reach >= 1 && !a.hookFx) {   // it bites
+    a.hookFx = true;
+    burst(S.glow, _cB, 40, PAL.hellchain, 8, 0.5, 0.5, 0.05, 6);
+    ring(S, _cB, COLOR.hellchain, { vertical: true, heading: tg.heading, r0: 0.3, r1: 3, life: 0.35 });
+  }
+}
+
+function chainSnapFx(S, car, tg) {
+  const { at } = chainCurve(car, tg, 0, S.time), mid = at(0.5, new THREE.Vector3());
+  const vx = ((car.vel?.x || 0) + (tg.vel?.x || 0)) / 2, vz = ((car.vel?.z || 0) + (tg.vel?.z || 0)) / 2;
+  for (let i = 0; i < 80; i++) {   // the links burst into embers
+    const p = at(Math.random(), _v);
+    S.glow.emit(p.x, p.y, p.z, vx * 0.8 + rnd(-5, 5), rnd(1, 6), vz * 0.8 + rnd(-5, 5), pick(PAL.hellchain), rnd(0.4, 0.8), 0.6, 0.1, 9, 1);
+  }
+  glowBall(S, mid, 2.4, 0.25, '#ffb347');
+  ring(S, mid, COLOR.hellchain, { vertical: true, heading: Math.atan2(_cB.x - _cA.x, _cB.z - _cA.z), r0: 0.4, r1: 4.5, life: 0.4 });
+  burst(S.smoke, mid, 12, PAL.smoke, 3, 0.8, 0.5, 1.6, -0.5, 1.5, 0.3);
+}
+
+// chained: release checks on every client (a lost 'rel' can't leave a remote chain hanging), then, on the owner's own
+// client, the tow toward a point HELL.follow m behind the target and the steering along its line
+function chainTow(race, car, a) {
+  const tg = a.target, tr = race.track;
+  if (a.t < HELL.hook) return;   // still flying
+  const gap = magnetGap(race, car, tg), proof = chainProof(tg);
+  // (owner quit online: its car is frozen where it left and no 'rel' will come)
+  if (a.t >= a.chainDur || car.finished || car._?.left || tg.finished || tg._?.left || proof || gap < 0 || gap > HELL.range * 1.5 || car.pos.distanceTo(tg.pos) <= HELL.snap) {
+    chainRelease(race, car, a, !proof);
+    return;
+  }
+  const m = car.mods, inp = car.input;
+  if (car.control === 'net' || !m || !tr?.samples) return;
+  const N = tr.samples.length, W = Math.max(0, tr.width / 2 - 1.8), ts = tr.samples[tg.trackIndex] || tr.samples[0], own = tr.samples[car.trackIndex] || ts;
+  // spring, only while facing down the road, adding speed up to the target's + 25% x power (the chain goes slack after that).
+  // Coasting or on the throttle, but never against the brakes, a spin or the off-road drag; a CPU only while it is below
+  // the corner speed it wants (full throttle)
+  const align = Math.max(0, Math.sin(car.heading) * own.tan.x + Math.cos(car.heading) * own.tan.z);
+  const want = car.spin > 0 || car.offroad ? 0 : car.control === 'cpu' ? +(inp.throttle >= 1) : 1 - inp.brake;
+  m.tow = Math.min(HELL.k * Math.max(0, gap - HELL.follow), HELL.pull * a.power) * align * want;
+  m.towV = Math.max(0, tg.speed || 0) * (1 + 0.25 * a.power);
+  if (!isHuman(car)) return;   // a CPU keeps its own line (it pulls out beside a car it closes on anyway)
+  // steering assist: aim at the road ahead (never past the target) one lane beside the target's line, inside the road.
+  // game.js blends it into the player's own steer (a drift still needs the player's own hard steer)
+  const tLat = (tg.pos.x - ts.pos.x) * ts.right.x + (tg.pos.z - ts.pos.z) * ts.right.z, room = k => W - k * tLat;
+  if (room(a.side) < HELL.lane && room(-a.side) > room(a.side)) a.side = -a.side;
+  const lane = clamp(tLat + a.side * HELL.lane, -W, W);
+  const p = tr.samples[(car.trackIndex + Math.max(1, Math.round(Math.min(gap, 7 + Math.max(0, car.speed) * 0.42) / (tr.length / N)))) % N];
+  m.assist = clamp(wrap(Math.atan2(p.pos.x + p.right.x * lane - car.pos.x, p.pos.z + p.right.z * lane - car.pos.z) - car.heading) * 2.4, -1, 1);
+}
+
+// the chain snaps: slingshot, or the small consolation boost when the target shrugged it off. The owner's client tells
+// everyone ('rel'); every client also releases on its own checks, whichever comes first.
+function chainRelease(race, car, a, sling) {
+  const S = st(race), tg = a.target, b = sling ? HELL_SLING : HELL_MISS;
+  if (tg?.pos) chainSnapFx(S, car, tg);
+  if (tg && !sling && tg.control !== 'net') {
+    if (tg.ability) tg.ability.hit = 1;
+    if (isHuman(tg)) flash(race, who(race, tg) + 'ガード!', COLOR.shield);
+  }
+  a.chained = false; a.target = null; a.t = 0;
+  a.active = a.activeMax = b.dur;
+  a.power = b.pow;
+  if (sling && isHuman(car)) flash(race, who(race, car) + 'スリングショット!', COLOR.hellchain);
+  if (race.net && car.control === 'p1') race.net.send({ t: 'ability', pid: race.localPid, id: 'hellchain', rel: 1 });
+}
+
 // shared by local activation and remote messages; car may be null (unknown remote pid).
 // target: thunderbolt victim / magnet target or null
 function start(race, car, id, dur, pow, pose, target = null) {
@@ -1139,7 +1280,15 @@ function start(race, car, id, dur, pow, pose, target = null) {
     a.active = a.activeMax = dur;
     a.power = pow;
     a.t = 0;
-    a.target = id === 'magnet' ? target : null;
+    a.target = id === 'magnet' || id === 'hellchain' ? target : null;
+    a.chained = false;
+    if (id === 'hellchain' && target && target !== car) {   // chain for dur, then the slingshot; a.power = the chain's until the snap
+      a.chained = true;
+      a.hookFx = a.hookFlash = false;
+      a.chainDur = dur;
+      a.active = a.activeMax = dur + HELL_SLING.dur;
+      a.side = (car.pos.x - target.pos.x) * -Math.cos(target.heading) + (car.pos.z - target.pos.z) * Math.sin(target.heading) < 0 ? -1 : 1;
+    }
     if (id === 'robotdash') {   // robot for dur (transform in included), change back, then the dash
       a.robotDur = dur;
       a.active = a.activeMax = dur + ROBOT_T + ROBOT_BOOST;
@@ -1188,7 +1337,7 @@ export function initAbility(race, car) {
   car.ability = {
     id, name: ABILITIES[id].name, gauge: 0, active: 0, activeMax: 0, power: 0, t: 0,
     slow: 0, slowVis: 0, hit: 0, fx: null, phaseSwap: null, target: null, sealed: false, domVis: 0,
-    dfVis: 0, robot: null, body: null, robotDur: 0, robotPh: 0,
+    dfVis: 0, robot: null, body: null, robotDur: 0, robotPh: 0, chained: false, chainFx: null,
   };
   car.spin ??= 0;
   if (id === 'robotdash') attachRobot(car);
@@ -1249,6 +1398,27 @@ export function updateAbilities(race, dt) {
     car.ability.slow = p;
     if (p && car.mods) car.mods.speedMul *= Math.max(0, 1 - p);
   }
+
+  // hellchain: the chained car hauls its owner along: slowed (after its own boosts, like timeslow) by the strongest chain
+  // on it, not once per chain. Only this client's own cars: a remote target's own client does it
+  const held = new Map();
+  for (const car of race.cars) {
+    const a = car.ability, tg = a.chained && a.t >= HELL.hook ? a.target : null;
+    if (!tg || tg.control === 'net' || tg.finished || !tg.mods || chainProof(tg)) continue;
+    const was = held.has(tg) || S.held?.has(tg);   // already on a chain: no second alarm
+    held.set(tg, Math.max(held.get(tg) || 0, Math.min(HELL.maxDrag, a.power)));
+    if (!isHuman(tg) || a.hookFlash) continue;
+    a.hookFlash = true;
+    if (was) continue;
+    flash(race, who(race, tg) + '鎖につながれた!', COLOR.hellchain);
+    screenFlash(race, tg, HELL_SCREEN);
+    race.hud?.shake?.(tg, 0.4);
+  }
+  for (const [tg, p] of held) {
+    tg.mods.speedMul *= 1 - p;
+    if (isHuman(tg) && Math.random() < dt * 5) race.hud?.shake?.(tg, 0.15);   // the chain rattles
+  }
+  S.held = held;
 
   // domain: other cars inside a live dome are slowed and sealed (gauge frozen, can't activate); shield ignores it.
   // Only this client's own cars: a remote car's own client applies it there.
@@ -1313,8 +1483,13 @@ export function tryActivate(race, car) {
   // before start(): in split screen a thunderbolt victim's '落雷!' must be the flash that stays
   if (isHuman(car)) flash(race, who(race, car) + def.name + '!', COLOR[a.id]);
   else if (a.id === 'timeslow' && slowedHumans(race)) flash(race, `${car.name}の${def.name}!`, COLOR.timeslow);
-  const target = a.id === 'thunderbolt' ? thunderTarget(race, car) : a.id === 'magnet' ? magnetTarget(race, car) : null;
+  const target = a.id === 'thunderbolt' ? thunderTarget(race, car) : a.id === 'magnet' ? magnetTarget(race, car)
+    : a.id === 'hellchain' ? magnetTarget(race, car, HELL.snap, HELL.range) : null;
   if (a.id === 'magnet' && !target) ({ dur, pow } = MAGNET_LEAD);   // leading: short weak boost
+  if (a.id === 'hellchain' && !target) {
+    ({ dur, pow } = HELL_MISS);
+    if (isHuman(car)) flash(race, who(race, car) + '届かない!', COLOR.hellchain);
+  }
   if (a.id === 'domain' && isHuman(car)) screenFlash(race, car, DOMAIN_SCREEN);
   start(race, car, a.id, dur, pow, pose, target);
   if (race.net && car.control === 'p1') {
@@ -1330,6 +1505,10 @@ export function applyRemoteAbility(race, msg) {
   if (!def || !race.scene || race.state !== 'running') return;
   const car = race.cars.find(c => c.pid != null && c.pid === msg.pid) || null;
   if (car && !car.ability) initAbility(race, car);
+  if (msg.rel) {   // hellchain: the owner's chain snapped
+    if (car?.ability.chained) chainRelease(race, car, car.ability, !chainProof(car.ability.target));
+    return;
+  }
   const num = (v, d) => (Number.isFinite(v) ? v : d);
   // peer data is untrusted: cap at 2x base (skill tree max is +25%)
   const dur = clamp(num(msg.dur, def.duration * (car?.stats?.abilityDuration || 1)), 0, def.duration * 2);
@@ -1348,6 +1527,12 @@ export function clearAbilities(race) {
     if (!a) continue;
     setPhase(car, false);
     if (a.fx) { a.fx.group.removeFromParent(); a.fx.mats.forEach(m => m.dispose()); a.fx.aura?.geometry.dispose(); a.fx.geos?.forEach(g => g.dispose()); a.fx = null; }
+    if (a.chainFx) {
+      const { links, glow } = a.chainFx;
+      links.removeFromParent(); links.dispose(); glow.removeFromParent(); glow.geometry.dispose(); glow.material.dispose();
+      a.chainFx = null;
+    }
+    a.chained = false;
     a.gone = true;   // a robot still loading must not attach any more
     if (a.body) { a.body.visible = true; a.body.scale.setScalar(1); a.body.rotation.y = 0; }
     if (a.robot) a.robot.visible = false;   // stays under the car mesh: stopRace disposes it with the scene
@@ -1361,6 +1546,7 @@ export function clearAbilities(race) {
   S.root.removeFromParent();
   S.glow.dispose(); S.smoke.dispose();
   S.dropMat?.dispose();
+  S.chainMat?.dispose();
   Object.values(S.geo).forEach(g => g.dispose());
   Object.values(S.tex).flat().forEach(t => t.dispose());
   Object.values(S.tint).forEach(el => el.remove());

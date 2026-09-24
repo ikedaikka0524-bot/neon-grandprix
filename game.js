@@ -26,7 +26,9 @@ function fmtTime(s) {
 }
 
 // downforce: ability power (0 = off): grip 0.99 whatever the course, no drift / lateral slip / cornering scrub, more steering
-const MODS0 = Object.freeze({ speedMul: 1, accelMul: 1, gripMul: 1, noCollide: false, noOffroadPenalty: false, invulnerable: false, downforce: 0 });
+// tow / towV (hellchain): pulled forward at tow m/s^2, throttle or not, but never past towV m/s (abilities.js zeroes it
+// under brakes / spin / off-road). assist: steering assist (-1..1) blended into a player's own steer
+const MODS0 = Object.freeze({ speedMul: 1, accelMul: 1, gripMul: 1, noCollide: false, noOffroadPenalty: false, invulnerable: false, downforce: 0, tow: 0, towV: 0, assist: 0 });
 const CPU_NAMES = ['ハヤテ', 'ミズキ', 'ライデン', 'サクラ', 'ゴンタ', 'ツバサ', 'カエデ', 'レン', 'ヒカル', 'シズク'];
 const KEYSETS = {
   single: { up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'], ability: ['Space', 'ShiftLeft', 'ShiftRight'], reset: ['KeyR'], label: 'SPACE' },
@@ -85,7 +87,10 @@ async function setup(ctx, root, opts, mode) {
   const race = ctx.race = {
     THREE, scene, time: 0, state: 'countdown', mode, def, cars: [], track,
     net: mode === 'online' ? (opts.net || null) : null, localPid: opts.localPid ?? null,
-    hazards: [], hud: { flash: (text, color) => flashAll(ctx, text, color), layer: car => ctx.viewByCar?.get(car)?.hud.tints },
+    hazards: [], hud: {
+      flash: (text, color) => flashAll(ctx, text, color), layer: car => ctx.viewByCar?.get(car)?.hud.tints,
+      shake: (car, s) => { const v = ctx.viewByCar?.get(car); if (v) v.shake = Math.max(v.shake, s); },   // that car's camera, if local
+    },
   };
   ctx.worldFx = await buildWorld(ctx, def);
   if (R !== ctx) return;
@@ -800,7 +805,7 @@ function stepCar(ctx, car, dt) {
     car.vel.set(Math.sin(car.heading) * car.speed, 0, Math.cos(car.heading) * car.speed);
   }
   const spinning = car.spin > 0;
-  let steerIn = inp.steer;
+  let steerIn = clamp(inp.steer + m.assist * (1 - Math.abs(inp.steer) * 0.7), -1, 1);
   if (spinning) {
     c.spinSteerT -= dt;
     if (c.spinSteerT <= 0) { c.spinSteer = Math.random() * 2 - 1; c.spinSteerT = 0.2; }
@@ -819,8 +824,8 @@ function stepCar(ctx, car, dt) {
   const steerRate = st.steer * Math.min(1, spd / 6) / (1 + spd / (50 * grip)) * (1 + 0.25 * df * Math.min(1, spd / 25));
   let yawT = c.steerS * steerRate * (vF < -0.5 ? -1 : 1);
   if (c.drift && df) endDrift(ctx, car);
-  // drift only on purpose: hard steer + brake at speed (keyboard steering is always full lock)
-  if (!c.drift && !df && !spinning && vF > 18 && Math.abs(c.steerS) > 0.6 && inp.brake > 0.3 && car.control !== 'cpu') {
+  // drift only on purpose: hard steer + brake at speed (keyboard steering is always full lock), the player's own steer
+  if (!c.drift && !df && !spinning && vF > 18 && Math.abs(c.steerS) > 0.6 && Math.abs(inp.steer) > 0.6 && inp.brake > 0.3 && car.control !== 'cpu') {
     c.drift = true; c.driftDir = Math.sign(c.steerS); c.driftT = 0;
   }
   if (c.drift) {
@@ -852,6 +857,7 @@ function stepCar(ctx, car, dt) {
   if (thr === 0 && brk === 0) vF -= Math.sign(vF) * Math.min(Math.abs(vF), (1.4 + 0.025 * Math.abs(vF)) * dt);
   if (vF > top) vF = Math.max(top, vF - (vF - top) * (off ? 2.4 : 1.3) * dt - 2 * dt);
   if (spinning) vF *= Math.exp(-0.9 * dt);
+  if (m.tow > 0 && vF < m.towV) vF = Math.min(m.towV, vF + m.tow * dt);
 
   // lateral grip; part of the scrubbed sideways speed is turned forward, never adding energy
   const k = spinning ? 1.2 : c.drift ? 2.5 + 6 * grip : 30 * grip;

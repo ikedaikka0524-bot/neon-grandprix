@@ -870,7 +870,7 @@ const ACCENTS = {
   },
   ur_graphite(s, m) {   // aero GT: blue glow lines along the sills and the splitter, dive planes
     m.glow.color.set(0x8fdcff); m.glow.emissive.set(0x1a8cff);
-    pair(s, box(0.02, 0.035, 3.3), m.glow, 1.0, 0.3, -0.05);
+    pair(s, box(0.02, 0.035, 1.77), m.glow, 1.0, 0.3, 0.025);   // sills, between the arches
     add(s, box(1.86, 0.025, 0.04), m.glow, 0, 0.215, 2.31);
     pair(s, box(0.3, 0.02, 0.18), m.black, 0.9, 0.4, 2.05).forEach(o => { o.rotation.x = -0.15; });
   },
@@ -878,6 +878,17 @@ const ACCENTS = {
     for (const z of [1.79, -1.78]) add(s, box(1.5, 0.1, 0.08), m.chrome, 0, 0.36, z);
     add(s, new THREE.CylinderGeometry(0.1, 0.1, 0.03, 20), m.chrome, 0, 0.86, 1.47).rotation.x = 0.24;
     pair(s, box(0.02, 0.05, 2.9), new THREE.MeshStandardMaterial({ color: 0xc8553d, roughness: 0.4 }), 0.785, 0.64, 0);
+  },
+  ur_inferno(s, m) {   // modern muscle: blacked-out trim, black stripes (on a light enough paint), fire-orange glow: scoop, sills, halo "cat eyes"
+    m.chrome.color.set(0x2b2d33); m.chrome.roughness = 0.25;
+    const c = m.body.color;
+    if (0.299 * c.r + 0.587 * c.g + 0.114 * c.b > 0.12) m.accent.color.set(0x121216);
+    m.glow.color.set(0xffb070); m.glow.emissive.set(0xff4a10);
+    add(s, box(0.4, 0.08, 0.02), m.glow, 0, 1.0, 1.605);                                                    // hood scoop mouth
+    pair(s, box(0.02, 0.035, 1.83), m.glow, 0.995, 0.42, 0.065);                                             // sills, between the arches
+    for (const x of [0.6, 0.38]) pair(s, new THREE.TorusGeometry(0.1, 0.014, 6, 20), m.glow, x, 0.66, 2.4); // halo rings
+    add(s, box(1.7, 0.05, 0.24), m.body, 0, 1.03, -2.16).rotation.x = 0.22;                                  // ducktail
+    add(s, box(1.86, 0.03, 0.22), m.black, 0, 0.27, 2.36);                                                   // splitter
   },
 };
 
