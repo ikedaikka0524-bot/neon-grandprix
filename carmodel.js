@@ -715,7 +715,8 @@ const BUILDERS = {
     return { wing: [-1.3, 1.3], wingW: 1.4 };
   },
 
-  dragon(g, s, m) {
+  dragon(g, s, m, def) {
+    const volt = def.id === 'ur_thunder';   // electric-blue horns, wings and flank bolts
     const hull = generic({
       W: 1.9, clear: 0.32, plateY: 0.55,
       top: [[2.0, 0.36], [2.05, 0.66], [1.8, 0.86], [0.9, 0.98], [-1.6, 1.0], [-2.05, 0.86], [-2.08, 0.36]],
@@ -725,9 +726,13 @@ const BUILDERS = {
       grille: null, wing: [-1.75, 1.02],
     });
     const res = hull(g, s, m);
-    const bone = new THREE.MeshStandardMaterial({ color: 0xf0cf7a, roughness: 0.45, metalness: 0.3 });
-    const eye = new THREE.MeshStandardMaterial({ color: 0xffee55, emissive: 0xffc400, emissiveIntensity: 2.5 });
-    const memb = new THREE.MeshStandardMaterial({ color: new THREE.Color(m.body.color).multiplyScalar(0.55), roughness: 0.6, side: THREE.DoubleSide });
+    const bone = volt ? new THREE.MeshStandardMaterial({ color: 0x3aa8ff, emissive: 0x0a6cff, emissiveIntensity: 0.9, roughness: 0.3, metalness: 0.4 })
+      : new THREE.MeshStandardMaterial({ color: 0xf0cf7a, roughness: 0.45, metalness: 0.3 });
+    const eye = volt ? m.glow : new THREE.MeshStandardMaterial({ color: 0xffee55, emissive: 0xffc400, emissiveIntensity: 2.5 });
+    const memb = volt ? new THREE.MeshStandardMaterial({ color: 0x1d4fd8, emissive: 0x0b3cff, emissiveIntensity: 0.5, roughness: 0.5, side: THREE.DoubleSide })
+      : new THREE.MeshStandardMaterial({ color: new THREE.Color(m.body.color).multiplyScalar(0.55), roughness: 0.6, side: THREE.DoubleSide });
+    // feather-icon zap (svg x,y) laid along each flank: nose-high, tail-low
+    if (volt) pair(s, extrude([[13, 2], [3, 14], [12, 14], [11, 22], [21, 10], [12, 10]].map(([x, y]) => [0.75 - (y - 2) * 0.075, 0.5 + (21 - x) * 0.02]), 0.02, 0), m.glow, 0.96, 0, 0);
     add(s, extrude([[2.38, 0.62], [2.42, 0.8], [2.1, 0.95], [1.6, 1.12], [1.2, 1.2], [0.9, 1.1], [0.9, 0.84], [1.5, 0.78], [2.0, 0.6]], 0.8, 0.06), m.body);
     pair(s, new THREE.SphereGeometry(0.085, 14, 10), eye, 0.37, 1.04, 1.55);
     pair(s, new THREE.SphereGeometry(0.04, 8, 6), m.black, 0.14, 0.74, 2.45);
@@ -845,7 +850,7 @@ function procedural(def, look) {
   g.userData.wheels = [];
   g.userData.steer = [];
   const s = new THREE.Group();
-  const info = (BUILDERS[def.body] || BUILDERS.sedan)(g, s, m) || {};
+  const info = (BUILDERS[def.body] || BUILDERS.sedan)(g, s, m, def) || {};
   if (look.wing && info.wing) addWing(s, m, info.wing[0], info.wing[1], info.wingW || 1.6);
   g.add(mergeStatic(s));
   return g;

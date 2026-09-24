@@ -4,9 +4,10 @@ import { ABILITIES } from './data.js';
 
 const OIL_RADIUS = 3, OIL_BEHIND = 4.2;
 const DRIFT_CHARGE = 1.2;   // extra gauge fill rate while drifting (stats.driftCharge)
+const THUNDER_BOOST = 0.3;  // thunderbolt: own speedMul / accelMul bonus while active
 const COLOR = {
   boost: '#5fe3ff', nitro: '#ff9a3c', oil: '#b6ff3b', shield: '#5ef1ff',
-  warp: '#6fe0ff', timeslow: '#c77dff', phase: '#ff8fd8',
+  warp: '#6fe0ff', timeslow: '#c77dff', phase: '#ff8fd8', thunderbolt: '#ffe14d',
 };
 const pal = (...h) => h.map(x => new THREE.Color(x));
 const PAL = {
@@ -16,6 +17,7 @@ const PAL = {
   warp: pal('#ffffff', '#bff4ff', '#4cc9f0', '#3a6bff'),
   timeslow: pal('#f0dcff', '#c77dff', '#7b2cbf', '#5a3dff'),
   phase: pal('#ffe0f0', '#ff8fd8', '#9ffcff'),
+  thunderbolt: pal('#ffffff', '#fff27a', '#ffd23f', '#9fe4ff', '#3a8bff'),
   oil: pal('#0b0a10', '#17131f', '#2b2438'),
   smoke: pal('#8a8f99', '#6b707a', '#a2a7b0'),
   spark: pal('#fff6b0', '#ffd23f', '#ffffff'),
@@ -183,6 +185,14 @@ function filmTex() {
   return t;
 }
 
+// lightning ribbon cross-section (u across): white core, electric-blue halo
+const beamTex = () => canvasTex(64, g => {
+  const gr = g.createLinearGradient(0, 0, 64, 0);
+  [[0, 'rgba(40,110,255,0)'], [0.28, 'rgba(90,170,255,0.55)'], [0.44, '#fff'], [0.56, '#fff'], [0.72, 'rgba(90,170,255,0.55)'], [1, 'rgba(40,110,255,0)']]
+    .forEach(([k, c]) => gr.addColorStop(k, c));
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+});
+
 // splat shape as grayscale alphaMap (max extent ≈ 0.86 of half size)
 const blobTex = () => canvasTex(256, g => {
   g.fillStyle = '#000'; g.fillRect(0, 0, 256, 256);
@@ -224,7 +234,7 @@ function st(race) {
 }
 
 function tex(S, key) {
-  return (S.tex[key] ||= key === 'clock' ? clockTex() : key === 'film' ? filmTex() : [blobTex(), blobTex(), blobTex()]);
+  return (S.tex[key] ||= key === 'clock' ? clockTex() : key === 'film' ? filmTex() : key === 'beam' ? beamTex() : [blobTex(), blobTex(), blobTex()]);
 }
 
 // transient world FX (rings, flashes): tick(obj, k) with k 0→1
@@ -232,6 +242,11 @@ function addFx(S, obj, life, tick) {
   S.root.add(obj);
   S.fx.push({ obj, t: 0, life, tick });
   tick(obj, 0);
+}
+function dropFx(f) {
+  f.obj.removeFromParent();
+  f.obj.material.dispose();
+  if (f.obj.userData.ownGeo) f.obj.geometry.dispose();
 }
 
 function ring(S, p, color, { vertical = false, heading = 0, r0 = 1, r1 = 8, life = 0.6, opacity = 0.9 } = {}) {
@@ -436,6 +451,35 @@ function carVisuals(race, S, car, dt) {
     }
   }
 
+  if (a.id === 'thunderbolt' && (act || fx.aura)) {   // electric aura: crackling arcs over the body + sparks
+    const on = act === 'thunderbolt';
+    if (!fx.aura) {
+      const mat = boltMat(S, '#fff3a0');
+      fx.aura = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+      fx.aura.frustumCulled = false;
+      fx.aura.renderOrder = 22;
+      fx.auraT = 0;
+      fx.group.add(fx.aura);
+      fx.mats.push(mat);
+    }
+    fx.aura.visible = on;
+    if (on && (fx.auraT -= dt) <= 0) {
+      fx.auraT = 0.05;
+      const b = fx.box, segs = [];
+      for (let i = 0; i < 7; i++) {
+        const p0 = new THREE.Vector3(rnd(b.min.x, b.max.x) * 1.1, rnd(b.min.y + 0.3, b.max.y + 0.2), rnd(b.min.z, b.max.z));
+        jag(p0, p0.clone().add(_w.set(rnd(-1, 1), rnd(-0.3, 0.8), rnd(-1.5, 1.5))), 0.35, 3, 0.26, segs, false);
+      }
+      fx.aura.geometry.dispose();
+      fx.aura.geometry = ribbons(segs);
+      fx.aura.material.color.set(Math.random() < 0.5 ? '#fff3a0' : '#9fe4ff');
+    }
+    if (on && Math.random() < dt * 40) {
+      world(_w.set(rnd(fx.box.min.x, fx.box.max.x), rnd(0.3, fx.box.max.y + 0.3), rnd(fx.box.min.z, fx.box.max.z)));
+      S.glow.emit(_v.x, _v.y, _v.z, vx + rnd(-2, 2), rnd(0, 2), vz + rnd(-2, 2), pick(PAL.thunderbolt), rnd(0.15, 0.3), 0.35, 0.05, 0, 3);
+    }
+  }
+
   if (car.spin > 0 && Math.random() < dt * 25) {   // dizzy sparkles
     const th = t * 9 + rnd(-0.3, 0.3);
     world(_w.set(Math.cos(th) * 0.9, fx.box.max.y + 0.5, Math.sin(th) * 0.9));
@@ -450,12 +494,14 @@ function applyOwn(car, a) {
   if (a.id === 'boost' || a.id === 'nitro') { m.speedMul += a.power; m.accelMul += a.power; }
   else if (a.id === 'shield') m.invulnerable = true;
   else if (a.id === 'phase') { m.noCollide = true; m.noOffroadPenalty = true; m.speedMul += a.power; }
+  else if (a.id === 'thunderbolt') { m.speedMul += THUNDER_BOOST; m.accelMul += THUNDER_BOOST; }   // a.power = victim's spin
 }
 
 function endFx(S, car) {
   const a = car.ability, p = _w.set(car.pos.x, car.pos.y + 0.8, car.pos.z);
   if (a.id === 'shield') burst(S.glow, p, 40, PAL.shield, 8, 0.5, 0.45, 0.05);
   else if (a.id === 'phase') { setPhase(car, false); burst(S.glow, p, 30, PAL.phase, 5, 0.6, 0.4, 0.05); }
+  else if (a.id === 'thunderbolt') burst(S.glow, p, 30, PAL.thunderbolt, 6, 0.5, 0.4, 0.05);
   else burst(S.smoke, p, 10, PAL.smoke, 2, 0.8, 0.5, 1.4, -0.5, 1.5, 0.25);
 }
 
@@ -586,8 +632,98 @@ function slowedHumans(race) {
   return race.cars.some(c => isHuman(c) && !c.mods?.invulnerable);
 }
 
-// shared by local activation and remote messages; car may be null (unknown remote pid)
-function start(race, car, id, dur, pow, pose) {
+// ---------- thunderbolt ----------
+// best-placed other car still racing: the leader, or the 2nd when the activator leads (_.left = quit online, game-owned)
+function thunderTarget(race, car) {
+  let best = null;
+  for (const c of race.cars) if (c !== car && !c.finished && !c._?.left && (!best || c.progress > best.progress)) best = c;
+  return best;
+}
+
+// midpoint displacement; the upper levels fork off thinner side branches. out = [[a, b, width], ...]
+function jag(a, b, d, n, w, out, fork) {
+  if (n === 0) { out.push([a, b, w]); return out; }
+  const m = new THREE.Vector3().lerpVectors(a, b, 0.5).add(_v.set(rnd(-d, d), rnd(-d, d) * 0.3, rnd(-d, d)));
+  jag(a, m, d / 2, n - 1, w, out, fork);
+  jag(m, b, d / 2, n - 1, w, out, fork);
+  if (fork && n >= 3 && Math.random() < 0.45) {
+    const e = new THREE.Vector3().subVectors(b, a).multiplyScalar(rnd(0.25, 0.5)).add(m).add(_v.set(rnd(-d, d) * 1.5, 0, rnd(-d, d) * 1.5));
+    jag(m, e, d / 2, n - 2, w * 0.5, out, false);
+  }
+  return out;
+}
+
+// two crossed ribbons per segment: reads from any side without per-view billboarding
+const _X = new THREE.Vector3(1, 0, 0), _Y = new THREE.Vector3(0, 1, 0);
+function ribbons(segs) {
+  const P = new Float32Array(segs.length * 36), U = new Float32Array(segs.length * 24);
+  const d = new THREE.Vector3(), s1 = new THREE.Vector3(), s2 = new THREE.Vector3();
+  let i = 0, j = 0;
+  for (const [a, b, w] of segs) {
+    d.subVectors(b, a).normalize();
+    s1.crossVectors(d, Math.abs(d.y) > 0.7 ? _X : _Y).normalize();
+    s2.crossVectors(d, s1);
+    for (const s of [s1, s2]) {
+      for (const [p, k] of [[a, -1], [b, -1], [b, 1], [a, -1], [b, 1], [a, 1]]) {
+        P[i++] = p.x + s.x * k * w / 2; P[i++] = p.y + s.y * k * w / 2; P[i++] = p.z + s.z * k * w / 2;
+        U[j++] = (k + 1) / 2; U[j++] = 0.5;
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(U, 2));
+  return g;
+}
+
+const boltMat = (S, color) => new THREE.MeshBasicMaterial({
+  map: tex(S, 'beam'), color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+  side: THREE.DoubleSide, fog: false, toneMapped: false,
+});
+
+// thunder: whole-viewport flash for a local victim (bottom half in split screen for P2)
+function screenFlash(race, car) {
+  if (typeof document === 'undefined') return;
+  const split = race.mode === 'split', el = document.createElement('div');
+  Object.assign(el.style, {
+    position: 'fixed', left: '0', width: '100%', pointerEvents: 'none', zIndex: '5',
+    top: split && car.control === 'p2' ? '50%' : '0', height: split ? '50%' : '100%',
+    background: 'radial-gradient(ellipse at 50% 20%, rgba(255,255,255,0.9), rgba(160,215,255,0.6) 50%, rgba(60,110,255,0.45) 100%)',
+  });
+  (document.getElementById('game') || document.body).appendChild(el);
+  el.animate?.([{ opacity: 1 }, { opacity: 0.1, offset: 0.2 }, { opacity: 0.85, offset: 0.35 }, { opacity: 0 }], { duration: 450, fill: 'forwards' });
+  setTimeout(() => el.remove(), 460);
+}
+
+// bolt from the sky onto the target (follows it for its 0.4 s), spark burst; spin unless shielded.
+// A 'net' target's spin only turns its mesh here: its own client applies the real one.
+function strike(race, S, target, pow) {
+  if (!target?.pos) return;
+  const bolt = new THREE.Mesh(ribbons(jag(new THREE.Vector3(rnd(-8, 8), 75, rnd(-8, 8)), new THREE.Vector3(0, 0.9, 0), 9, 6, 2.4, [], true)), boltMat(S, '#ffffff'));
+  bolt.userData.ownGeo = true;
+  bolt.frustumCulled = false;
+  bolt.renderOrder = 22;
+  addFx(S, bolt, 0.4, (o, k) => {
+    o.position.copy(target.pos);
+    o.material.opacity = (k > 0.12 && k < 0.2) || (k > 0.45 && k < 0.52) ? 0.15 : 1 - k * 0.6;   // strike, flicker, restrike
+  });
+  const p = new THREE.Vector3(target.pos.x, target.pos.y + 0.9, target.pos.z), guard = !!target.mods?.invulnerable;
+  glowBall(S, p, guard ? 2.4 : 2.8, 0.22, guard ? '#e8feff' : '#cfeaff');
+  burst(S.glow, p, 70, guard ? PAL.shield : PAL.thunderbolt, 14, 0.6, 0.55, 0.05, 12, 1.5, 1, 4);
+  ring(S, _w.set(p.x, target.pos.y + 0.15, p.z), COLOR.thunderbolt, { r0: 1, r1: 9, life: 0.5 });
+  if (target.finished) return;
+  if (guard) {
+    if (target.ability) target.ability.hit = 1;
+    if (isHuman(target)) flash(race, who(race, target) + 'ガード!', COLOR.shield);
+    return;
+  }
+  target.spin = Math.max(target.spin || 0, pow);
+  burst(S.smoke, p, 14, PAL.smoke, 3, 0.9, 0.5, 1.6, -0.5, 1.5, 0.3);
+  if (isHuman(target)) { flash(race, who(race, target) + '⚡ 落雷!', '#8fd8ff'); screenFlash(race, target); }
+}
+
+// shared by local activation and remote messages; car may be null (unknown remote pid). target: thunderbolt victim or null
+function start(race, car, id, dur, pow, pose, target = null) {
   const S = st(race), at = new THREE.Vector3(pose.x, pose.y, pose.z);
   if (id === 'warp') {
     const d = warpDest(race, pose, pow);
@@ -612,6 +748,7 @@ function start(race, car, id, dur, pow, pose) {
     a.power = pow;
     a.t = 0;
   }
+  if (id === 'thunderbolt') strike(race, S, target, pow);
   const c = PAL[id];
   if (id !== 'oil') burst(S.glow, _w.copy(at).setY(at.y + 0.8), 36, c, 7, 0.5, 0.5, 0.05, 0, 2.5);
   if (id !== 'timeslow') ring(S, _w.copy(at).setY(at.y + 0.15), COLOR[id], { r0: 1.5, r1: 6, life: 0.4, opacity: 0.8 });
@@ -694,7 +831,7 @@ export function updateAbilities(race, dt) {
   j = 0;
   for (const f of S.fx) {
     f.t += dt;
-    if (f.t >= f.life) { f.obj.removeFromParent(); f.obj.material.dispose(); }
+    if (f.t >= f.life) dropFx(f);
     else { f.tick(f.obj, f.t / f.life); S.fx[j++] = f; }
   }
   S.fx.length = j;
@@ -713,11 +850,13 @@ export function tryActivate(race, car) {
   const dur = def.duration * (car.stats?.abilityDuration || 1), pow = def.power * (car.stats?.abilityPower || 1);
   const pose = { x: car.pos.x, y: car.pos.y, z: car.pos.z, h: car.heading };
   a.gauge = 0;
-  start(race, car, a.id, dur, pow, pose);
+  // before start(): in split screen a thunderbolt victim's '落雷!' must be the flash that stays
   if (isHuman(car)) flash(race, who(race, car) + def.name + '!', COLOR[a.id]);
   else if (a.id === 'timeslow' && slowedHumans(race)) flash(race, `${car.name}の${def.name}!`, COLOR.timeslow);
+  const target = a.id === 'thunderbolt' ? thunderTarget(race, car) : null;
+  start(race, car, a.id, dur, pow, pose, target);
   if (race.net && car.control === 'p1') {
-    race.net.send({ t: 'ability', pid: race.localPid, id: a.id, x: r2(pose.x), y: r2(pose.y), z: r2(pose.z), h: r2(pose.h), dur: r2(dur), pow: r2(pow) });
+    race.net.send({ t: 'ability', pid: race.localPid, id: a.id, x: r2(pose.x), y: r2(pose.y), z: r2(pose.z), h: r2(pose.h), dur: r2(dur), pow: r2(pow), ...(target?.pid != null && { tp: String(target.pid) }) });
   }
   return true;
 }
@@ -732,7 +871,8 @@ export function applyRemoteAbility(race, msg) {
   const dur = clamp(num(msg.dur, def.duration * (car?.stats?.abilityDuration || 1)), 0, def.duration * 2);
   const pow = clamp(num(msg.pow, def.power * (car?.stats?.abilityPower || 1)), 0, def.power * 2);
   const pose = { x: num(msg.x, car?.pos.x ?? 0), y: num(msg.y, car?.pos.y ?? 0), z: num(msg.z, car?.pos.z ?? 0), h: num(msg.h, car?.heading ?? 0) };
-  start(race, car, msg.id, dur, pow, pose);
+  const target = msg.id === 'thunderbolt' && msg.tp != null ? race.cars.find(c => c.pid != null && String(c.pid) === String(msg.tp)) || null : null;
+  start(race, car, msg.id, dur, pow, pose, target);
   if (msg.id === 'timeslow' && slowedHumans(race)) flash(race, `${car ? car.name + 'の' : ''}${def.name}!`, COLOR.timeslow);
 }
 
@@ -743,12 +883,12 @@ export function clearAbilities(race) {
     const a = car.ability;
     if (!a) continue;
     setPhase(car, false);
-    if (a.fx) { a.fx.group.removeFromParent(); a.fx.mats.forEach(m => m.dispose()); a.fx = null; }
+    if (a.fx) { a.fx.group.removeFromParent(); a.fx.mats.forEach(m => m.dispose()); a.fx.aura?.geometry.dispose(); a.fx = null; }
     a.active = a.slow = a.slowVis = 0;
   }
   const S = STATE.get(race);
   if (!S) return;
-  for (const f of S.fx) f.obj.material.dispose();
+  S.fx.forEach(dropFx);
   S.root.removeFromParent();
   S.glow.dispose(); S.smoke.dispose();
   S.dropMat?.dispose();
