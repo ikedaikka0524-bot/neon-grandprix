@@ -2,7 +2,7 @@
 import { TRACKS } from '../tracks.js';
 
 const WALL_PAD = 10.5;              // barriers/ad walls sit at width/2 + ~10 m
-const MIN_RADIUS = 15, MAX_GRADE = 0.13, MIN_LEN = 900, MAX_LEN = 2400;
+const MIN_RADIUS = 13, MAX_GRADE = 0.13, MIN_LEN = 900, MAX_LEN = 5500;   // nring: real-scale hairpin ~14 m, 5.1 km
 
 function poly(x0, x1, x2, x3, d0, d1, d2) {
   let t1 = (x1 - x0) / d0 - (x2 - x0) / (d0 + d1) + (x2 - x1) / d1;
