@@ -8,7 +8,7 @@ const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 const cr = (p0, p1, p2, p3, t) =>   // uniform Catmull-Rom
   0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (3 * p1 - p0 - 3 * p2 + p3) * t * t * t);
 
-export function createRecorder(car) {
+export function createRecorder(car, trackId) {
   const frames = [];
   let next = 0, prev = null, done = false;
   const pose = () => [car.pos.x, car.pos.y, car.pos.z, car.heading, car.progress];
@@ -34,7 +34,7 @@ export function createRecorder(car) {
       // leaving the ghost's final progress short of the line and the HUD diff blank there
       const end = pose().map((v, i) => (i === 4 ? r4(v) : r2(v)));
       if (!frames.length || frames[frames.length - 1][4] < end[4]) frames.push(end);
-      return { v: 1, carId: car.carId, look: { ...car.look }, time: Math.round(totalTime * 1000) / 1000, dt: DT, frames };
+      return { v: 1, trackId, carId: car.carId, look: { ...car.look }, time: Math.round(totalTime * 1000) / 1000, dt: DT, frames };
     },
   };
 }

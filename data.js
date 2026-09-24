@@ -124,13 +124,3 @@ export const ECONOMY = {
   firstClearTickets: 3,              // first race ever finished
 };
 
-// Track centerline control points [x, y, z]; closed CatmullRom loop, ~1.3 km.
-export const TRACK = {
-  width: 16,
-  laps: 3,
-  points: [
-    [0, 0, 0], [0, 0, 120], [20, 2, 200], [80, 6, 240], [160, 8, 230], [210, 6, 180],
-    [200, 3, 110], [150, 0, 70], [140, 0, 10], [190, 2, -50], [180, 5, -130],
-    [110, 7, -170], [40, 4, -150], [0, 1, -80],
-  ],
-};

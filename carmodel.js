@@ -8,24 +8,37 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CARS, CAR_BY_ID } from './data.js';
 
 const CAR_LEN = 4.2;
+const CAR_MAX_W = 2.4;   // Meshy cars are chubby: at 4.2 m long the kei would be 2.9 m wide / 2.5 m tall (collision is ~2 m)
 const glbCache = new Map();
 
-// fetch + parse ourselves: a timeout and retries survive flaky local servers (a stalled request must not hang a race start)
+// fetch + parse ourselves: a timeout and retries survive flaky local servers (a stalled request must not hang a race start).
+// The timeout is on silence, not on the whole download: a 3 MB model on a slow phone link must still finish.
+// Returns undefined when the network gave up (retried on the next load), null when there is no usable model.
 async function fetchGLB(url) {
   for (let i = 0; i < 3; i++) {
+    const ac = new AbortController();
+    let stall = 0;
+    const poke = () => { clearTimeout(stall); stall = setTimeout(() => ac.abort(), 8000); };
     let buf;
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      poke();
+      const res = await fetch(url, { signal: ac.signal });
       if (!res.ok) return null;                 // 404: no model -> procedural
-      buf = await res.arrayBuffer();
-    } catch { continue; }                       // network hiccup / timeout -> retry
+      buf = await new Response(res.body.pipeThrough(new TransformStream({ transform(c, out) { poke(); out.enqueue(c); } }))).arrayBuffer();
+    } catch { continue; }                       // network hiccup / stall -> retry
+    finally { clearTimeout(stall); }
     try { return (await new GLTFLoader().parseAsync(buf, 'models/')).scene || null; } catch { return null; }
   }
-  return null;
+  return undefined;
 }
 
 function loadGLB(carId) {
-  if (!glbCache.has(carId)) glbCache.set(carId, fetchGLB(`models/${carId}.glb`));
+  if (!glbCache.has(carId)) {
+    glbCache.set(carId, fetchGLB(`models/${carId}.glb`).then(m => {
+      if (m === undefined) glbCache.delete(carId);   // network trouble: try again next race instead of a procedural car all session
+      return m ?? null;
+    }));
+  }
   return glbCache.get(carId);
 }
 
@@ -60,7 +73,7 @@ function fromGLB(src, def, look) {
   inner.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(inner);
   const size = box.getSize(new THREE.Vector3());
-  inner.scale.setScalar(CAR_LEN / Math.max(size.x, size.z, 1e-6));
+  inner.scale.setScalar(Math.min(CAR_LEN / Math.max(size.x, size.z, 1e-6), CAR_MAX_W / Math.max(Math.min(size.x, size.z), 1e-6)));
   inner.updateMatrixWorld(true);
   box.setFromObject(inner);
   const c = box.getCenter(new THREE.Vector3());
@@ -74,30 +87,32 @@ function fromGLB(src, def, look) {
   g.userData.steer = [];
 
   const best = largestMaterial(model);
-  if (best?.map?.image) repaint(best, def, look.body);
+  if (best?.map?.image) repaint(best, def, look.body, model);
   else if (best?.color) best.color.set(look.body);
 
   if (look.wing) {
     g.updateMatrixWorld(true);
     const b = new THREE.Box3().setFromObject(g);
-    const s = new THREE.Group();
-    addWing(s, makeMats(def, look), b.min.z + 0.45, rearTop(g, b.min.z + 0.7) - 0.05, Math.min(1.7, b.max.x - b.min.x));
+    const s = new THREE.Group(), z = b.min.z + 0.45, w = Math.min(1.7, b.max.x - b.min.x);
+    if (!deckCache.has(def.id)) deckCache.set(def.id, deckY(g, z, w * 0.3));   // ~100 ms of raycasts on 60k tris
+    addWing(s, makeMats(def, look), z, deckCache.get(def.id) - 0.05, w);
     g.add(mergeStatic(s));
   }
   return g;
 }
 
-// highest point of the body near the tail, so the wing sits on the boot / roof instead of inside a boxy van
-function rearTop(root, zMax) {
-  let top = 0;
-  const v = new THREE.Vector3();
-  root.updateMatrixWorld(true);
-  root.traverse(o => {
-    const p = o.isMesh && o.geometry?.attributes?.position;
-    if (!p) return;
-    for (let i = 0; i < p.count; i += 3) { v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld); if (v.z < zMax && v.y > top) top = v.y; }
-  });
-  return top;
+// Height of the body under the wing: median of downward ray hits across the tail, so a lone antenna,
+// roll bar or roof rack can't lift the wing into the air (the old "highest vertex" did).
+const deckCache = new Map();
+function deckY(root, z, halfW) {
+  const rc = new THREE.Raycaster(), down = new THREE.Vector3(0, -1, 0), o = new THREE.Vector3(), ys = [];
+  for (const x of [-halfW, -halfW / 2, 0, halfW / 2, halfW]) for (const dz of [0, 0.15]) {
+    rc.set(o.set(x, 20, z + dz), down);
+    const hit = rc.intersectObject(root, true)[0];
+    if (hit) ys.push(hit.point.y);
+  }
+  ys.sort((a, b) => a - b);
+  return ys.length ? ys[ys.length >> 1] : new THREE.Box3().setFromObject(root).max.y;
 }
 
 function largestMaterial(root) {
@@ -132,12 +147,12 @@ function largestMaterial(root) {
 // A textured GLB is one atlas (paint, tyres, glass), so tinting .color would tint everything.
 // Instead re-colour only the texels that match the car's stock paint, keeping their baked shading.
 const paintCache = new Map();   // small LRU: the garage colour picker produces many colours
-function repaint(mat, def, hex) {
+function repaint(mat, def, hex, root) {
   if (new THREE.Color(hex).getHex() === new THREE.Color(def.color).getHex()) return;   // stock colour: original texture
   const key = def.id + '|' + hex;
   let tex = paintCache.get(key);
   if (tex) paintCache.delete(key);
-  else if (!(tex = bakePaint(mat.map, def.color, hex))) return;
+  else if (!(tex = bakePaint(mat.map, def.color, hex, root, mat))) return;
   paintCache.set(key, tex);
   if (paintCache.size > 16) { const [k, old] = paintCache.entries().next().value; paintCache.delete(k); old.dispose(); }
   mat.map = tex;
@@ -153,7 +168,7 @@ function hsv(r, g, b) {
   S = mx ? dd / mx : 0; V = mx / 255;
 }
 
-function bakePaint(src, stockHex, hex) {
+function bakePaint(src, stockHex, hex, root, mat) {
   try {
     const img = src.image, c = document.createElement('canvas');
     c.width = img.width; c.height = img.height;
@@ -182,13 +197,15 @@ function bakePaint(src, stockHex, hex) {
     }
     if (n < samples * 0.02) return null;
     const vRef = vSum / n;
+    // silver rims / grey hubs pass the neutral test too: keep the wheels out of the paint
+    const wheels = neutral ? wheelMask(root, mat, d, c.width, c.height) : null;
     // 2) move those texels to the new colour, scaled by their brightness relative to the mean paint
     const [tr, tg, tb] = rgb255(hex);
     for (let i = 0; i < d.length; i += 4) {
       const r = d[i], gg = d[i + 1], b = d[i + 2];
       hsv(r, gg, b);
       const w = neutral
-        ? (1 - sstep(0.12, 0.22, S)) * sstep(vRef * 0.45, vRef * 0.6, V)
+        ? (1 - sstep(0.12, 0.22, S)) * sstep(vRef * 0.45, vRef * 0.6, V) * (wheels ? 1 - wheels[i >> 2] : 1)
         : (1 - sstep(22, 38, hueDist(H, hue))) * sstep(0.18, 0.32, S) * sstep(0.05, 0.1, V);
       if (w <= 0) continue;
       const k = V / vRef;
@@ -202,6 +219,85 @@ function bakePaint(src, stockHex, hex) {
     t.needsUpdate = true;
     return t;
   } catch { return null; }
+}
+
+// UV-space mask (1 byte per texel, 1 = wheel) of the texels on the wheels of a textured GLB, or null.
+// Side view: the tyres are what touches the ground (front/rear axle = median of the lowest vertices); the radius is
+// the circle whose hub is brightest against the darkest tyre ring.
+function wheelMask(root, mat, d, tw, th) {
+  if (!root) return null;
+  const pos = [], tri = [], uv = [], v = new THREE.Vector3();
+  root.updateMatrixWorld(true);
+  root.traverse(o => {
+    const g = o.geometry, p = g?.attributes?.position, t = g?.attributes?.uv;
+    if (!o.isMesh || !p || !t || ![].concat(o.material).includes(mat)) return;
+    const base = pos.length / 3, n = g.index ? g.index.count : p.count;
+    for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld); pos.push(v.x, v.y, v.z); uv.push(t.getX(i), t.getY(i)); }
+    for (let i = 0; i < n; i++) tri.push(base + (g.index ? g.index.getX(i) : i));
+  });
+  const nv = pos.length / 3;
+  if (!nv) return null;
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < nv; i++) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], pos[i * 3 + k]); hi[k] = Math.max(hi[k], pos[i * 3 + k]); }
+  const A = hi[0] - lo[0] > hi[2] - lo[2] ? 0 : 2, B = 2 - A, L = hi[A] - lo[A], H = hi[1] - lo[1], halfB = (hi[B] - lo[B]) / 2 || 1;
+  const ls = new Float32Array(nv), ys = new Float32Array(nv), side = new Uint8Array(nv), val = new Float32Array(nv);
+  for (let i = 0; i < nv; i++) {
+    ls[i] = pos[i * 3 + A] - (lo[A] + hi[A]) / 2;
+    ys[i] = pos[i * 3 + 1] - lo[1];
+    side[i] = Math.abs(pos[i * 3 + B] - (lo[B] + hi[B]) / 2) / halfB > 0.5;
+    const x = Math.min(tw - 1, Math.max(0, (uv[i * 2] * tw) | 0)), y = Math.min(th - 1, Math.max(0, (uv[i * 2 + 1] * th) | 0)), k = (y * tw + x) * 4;
+    val[i] = Math.max(d[k], d[k + 1], d[k + 2]) / 255;
+  }
+  const discs = [];
+  for (const sg of [-1, 1]) {
+    const contact = [];
+    for (let i = 0; i < nv; i++) if (ys[i] < 0.02 * H && Math.sign(ls[i]) === sg) contact.push(ls[i]);
+    if (contact.length < 5) continue;
+    contact.sort((a, b) => a - b);
+    const cx = contact[contact.length >> 1], near = [];
+    for (let i = 0; i < nv; i++) if (side[i] && Math.abs(ls[i] - cx) < 0.3 * L && ys[i] < 0.6 * L) near.push(i);
+    let best = null;
+    for (let r = 0.05 * L; r <= 0.3 * L; r += 0.004 * L) {
+      let si = 0, ni = 0, sr = 0, nr = 0;
+      for (const i of near) {
+        const dx = ls[i] - cx, dy = ys[i] - r, dd = (dx * dx + dy * dy) / (r * r);
+        if (dd < 0.3025) { si += val[i]; ni++; } else if (dd > 0.6084 && dd < 0.9409) { sr += val[i]; nr++; }   // < .55r | .78r .. .97r
+      }
+      if (ni < 20 || nr < 20) continue;
+      const score = si / ni - sr / nr;
+      if (!best || score > best.score) best = { score, r };
+    }
+    if (best && best.score > 0.1 && best.r < 0.29 * L) discs.push({ cx, r: best.r });
+  }
+  if (!discs.length) return null;
+  const mask = new Uint8Array(tw * th);
+  for (let t = 0; t + 2 < tri.length; t += 3) {
+    const a = tri[t], b = tri[t + 1], e = tri[t + 2];
+    const ml = (ls[a] + ls[b] + ls[e]) / 3, my = (ys[a] + ys[b] + ys[e]) / 3;
+    if (discs.some(w => Math.hypot(ml - w.cx, my - w.r) < 0.85 * w.r)) {
+      fillTri(mask, tw, th, uv[a * 2] * tw, uv[a * 2 + 1] * th, uv[b * 2] * tw, uv[b * 2 + 1] * th, uv[e * 2] * tw, uv[e * 2 + 1] * th);
+    }
+  }
+  return mask;
+}
+// Sets the texels within 1.5 px of a triangle (the margin covers mip filtering at UV island edges).
+// (Hot loop: plain arithmetic. A 2D-canvas path of the same triangles took ~0.7 s to build.)
+const triN = new Float64Array(9);
+function fillTri(m, w, h, x0, y0, x1, y1, x2, y2) {
+  const sg = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0) < 0 ? -1 : 1, P = [x0, y0, x1, y1, x2, y2, x0, y0], N = triN;
+  for (let k = 0; k < 3; k++) {   // inward unit normal of each edge, offset 1.5 px outward
+    const ax = P[k * 2], ay = P[k * 2 + 1], dx = P[k * 2 + 2] - ax, dy = P[k * 2 + 3] - ay, len = Math.hypot(dx, dy) || 1;
+    N[k * 3] = -sg * dy / len; N[k * 3 + 1] = sg * dx / len; N[k * 3 + 2] = 1.5 - N[k * 3] * ax - N[k * 3 + 1] * ay;
+  }
+  const xa = Math.max(0, Math.floor(Math.min(x0, x1, x2) - 2)), xb = Math.min(w - 1, Math.ceil(Math.max(x0, x1, x2) + 2));
+  const ya = Math.max(0, Math.floor(Math.min(y0, y1, y2) - 2)), yb = Math.min(h - 1, Math.ceil(Math.max(y0, y1, y2) + 2));
+  for (let y = ya; y <= yb; y++) {
+    const py = y + 0.5;
+    for (let x = xa; x <= xb; x++) {
+      const px = x + 0.5;
+      if (N[0] * px + N[1] * py + N[2] > 0 && N[3] * px + N[4] * py + N[5] > 0 && N[6] * px + N[7] * py + N[8] > 0) m[y * w + x] = 1;
+    }
+  }
 }
 
 // ---------- procedural helpers ----------

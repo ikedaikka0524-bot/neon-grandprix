@@ -3,8 +3,9 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import {
   RARITY, RARITY_ORDER, ABILITIES, PASSIVES, CARS, CAR_BY_ID, STARTER_CAR, SKILL_TREE, NODE_BY_ID,
-  nodeCost, nodeBlockReason, computeStats, GACHA, ECONOMY, TRACK,
+  nodeCost, nodeBlockReason, computeStats, GACHA, ECONOMY,
 } from './data.js';
+import { TRACKS, TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
 import { getSave, persist, newCarRec, resetSave, reloadSave, loadGhost, saveGhost } from './save.js';
 import { buildCarMesh, preloadCarModels } from './carmodel.js';
 import { startRace, stopRace } from './game.js';
@@ -28,7 +29,13 @@ const pullCost = (n, tk) => tk ? (n === 10 ? GACHA.tenTickets : GACHA.singleTick
 
 let save = getSave();
 const owned = () => CARS.filter(c => save.cars[c.id]);
-const validGhost = id => { const g = loadGhost(id); return g && Array.isArray(g.frames) && g.frames.length > 1 && isFinite(g.time) ? g : null; };
+const validGhost = (id, tid) => {
+  const g = loadGhost(id, tid);
+  return g && Array.isArray(g.frames) && g.frames.length > 1 && isFinite(g.time) && (!g.trackId || g.trackId === tid) ? g : null;
+};
+const curTrack = () => TRACK_BY_ID[save.lastTrack] ? save.lastTrack : DEFAULT_TRACK;
+const bestOf = (id, tid) => save.cars[id]?.best?.[tid] || {};
+const coinMul = tid => 1 + 0.25 * ((TRACK_BY_ID[tid]?.difficulty || 1) - 1);
 
 /* ================= sound (tiny WebAudio synth) ================= */
 let AC = null;
@@ -317,8 +324,8 @@ function loop(now) {
 
 /* ================= screens / navigation ================= */
 const PREP = {
-  solo: { tag: 'SOLO', title: 'ソロ（CPU戦）', lead: 'CPUと3周のレース。順位に応じてコインを獲得！' },
-  ghost: { tag: 'GHOST', title: '過去の自分と対戦', lead: 'この車の最速記録を再現したゴーストとタイムアタック。' },
+  solo: { tag: 'SOLO', title: 'ソロ（CPU戦）', lead: 'CPUとレース。順位に応じてコインを獲得！ 難しいコースほど賞金アップ。' },
+  ghost: { tag: 'GHOST', title: '過去の自分と対戦', lead: 'この車・このコースの最速記録を再現したゴーストとタイムアタック。' },
   split: { tag: 'VERSUS', title: '2人対戦（画面分割）', lead: '1台のキーボードで2人対戦。上画面がP1、下画面がP2。' },
 };
 const SCREENS = {
@@ -414,7 +421,7 @@ function renderHome() {
   $('#homeStats').textContent = `レース ${save.stats.races} ・ 優勝 ${save.stats.wins} ・ コレクション ${owned().length}/${CARS.length}`;
   $('#homeCar').innerHTML = `${rb(c.rarity)}<span>${esc(c.name)}</span>`;
   $('#homeAbility').innerHTML = abilityHTML(computeStats(id, rec.nodes));
-  const g = validGhost(id);
+  const g = validGhost(id, curTrack());
   $('#tileGhost small').textContent = g ? `ゴースト ${fmt(g.time)} に挑戦` : '自分のゴーストに挑戦';
   $('#gachaBadge').innerHTML = save.tickets > 0 ? `<i class="ic-ticket"></i>${save.tickets}` : '';
 }
@@ -424,19 +431,58 @@ let cpuCount = 3;
 const KEYS_SOLO = `<div><span>${K('W A S D')}<i>/</i>${K('↑ ← ↓ →')}</span>運転</div><div><span>${K('Space')}<i>/</i>${K('Shift')}</span>能力</div><div><span>${K('Esc')}</span>ポーズ</div>`;
 const KEYS_SPLIT = `<div><span class="p1">P1 上画面</span><span>${K('W A S D')} ＋ ${K('左Shift')}</span></div><div><span class="p2">P2 下画面</span><span>${K('↑ ← ↓ →')} ＋ ${K('右Shift')}</span></div>`;
 
-const TRACK_MAP = (() => {
-  const curve = new THREE.CatmullRomCurve3(TRACK.points.map(p => new THREE.Vector3(p[0], p[1], p[2])), true);
-  const pts = curve.getSpacedPoints(200), pad = 20;
-  const xs = pts.map(p => p.x), zs = pts.map(p => p.z);
-  const minX = Math.min(...xs), maxX = Math.max(...xs), maxZ = Math.max(...zs), minZ = Math.min(...zs);
-  const P = p => [(p.x - minX + pad).toFixed(1), (maxZ - p.z + pad).toFixed(1)];
-  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${P(p).join(' ')}`).join('') + 'Z';
-  const [sx, sy] = P(pts[0]).map(Number);
-  return {
-    len: curve.getLength(),
-    svg: `<svg viewBox="0 0 ${(maxX - minX + pad * 2).toFixed(0)} ${(maxZ - minZ + pad * 2).toFixed(0)}"><path class="tm" d="${d}"/><rect class="tm-start" x="${sx - 12}" y="${sy - 4}" width="24" height="8"/><circle class="tm-car" r="9"><animateMotion dur="7s" repeatCount="indefinite" path="${d}"/></circle></svg>`,
-  };
-})();
+/* ---------- courses ---------- */
+const THEME = {
+  forest: { c: '#3dffa8', name: '森' }, city: { c: '#ff4fd8', name: '市街地' }, desert: { c: '#ff9a3d', name: '砂漠' },
+  snow: { c: '#9fdcff', name: '雪山' }, beach: { c: '#22e6ff', name: '海岸' },
+};
+const TIME = { day: '昼', night: '夜', sunset: '夕暮れ' };
+// Minimaps: same top-down orientation as the in-game map (+x to the left, +z up), start line across the road.
+const COURSE = Object.fromEntries(TRACKS.map(t => {
+  const curve = new THREE.CatmullRomCurve3(t.points.map(p => new THREE.Vector3(p[0], p[1], p[2])), true, 'centripetal');
+  const pts = curve.getSpacedPoints(160).slice(0, -1);
+  const xs = pts.map(p => p.x), zs = pts.map(p => p.z), maxX = Math.max(...xs), maxZ = Math.max(...zs);
+  const w = maxX - Math.min(...xs), h = maxZ - Math.min(...zs), S = Math.max(w, h), pad = S * 0.07;
+  const X = p => +(maxX - p.x + pad).toFixed(1), Y = p => +(maxZ - p.z + pad).toFixed(1);
+  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p)} ${Y(p)}`).join('') + 'Z';
+  const tan = curve.getTangentAt(0), k = S * 0.055 / (Math.hypot(tan.x, tan.z) || 1), sx = X(pts[0]), sy = Y(pts[0]);
+  const base = `<path class="tm-glow" d="${d}"/><path class="tm-line" d="${d}"/><path class="tm-start" d="M${(sx - tan.z * k).toFixed(1)} ${(sy + tan.x * k).toFixed(1)}L${(sx + tan.z * k).toFixed(1)} ${(sy - tan.x * k).toFixed(1)}"/>`;
+  return [t.id, {
+    km: (curve.getLength() / 1000).toFixed(2),
+    svg: car => `<svg viewBox="0 0 ${(w + pad * 2).toFixed(0)} ${(h + pad * 2).toFixed(0)}" aria-hidden="true">${base}${car ? `<circle class="tm-car" r="${(S * 0.035).toFixed(1)}"><animateMotion dur="7s" repeatCount="indefinite" path="${d}"/></circle>` : ''}</svg>`,
+  }];
+}));
+const stars = n => `${'★'.repeat(n)}<i>${'★'.repeat(3 - n)}</i>`;
+
+// ro: guests in the online lobby only see the host's pick. ghost: show this car's ghost per course instead of bests.
+function renderCourses(box, sel, { ro = false, ghost = false } = {}) {
+  const id = save.selected.p1, x = box.scrollLeft;
+  box.classList.toggle('ro', ro);
+  box.innerHTML = TRACKS.map(t => {
+    const on = t.id === sel, b = bestOf(id, t.id), mul = coinMul(t.id), g = ghost && validGhost(id, t.id);
+    const foot = ghost
+      ? (g ? `<span>ゴースト</span><b>${fmt(g.time)}</b>` : '<span class="none">ゴーストなし</span>')
+      : `<span>ベスト</span><b>${fmt(b.race)}</b><span>ラップ</span><b>${fmt(b.lap)}</b>`;
+    return `<button class="course ${on ? 'on' : ''}" data-track="${t.id}" style="--tc:${THEME[t.theme].c}" aria-pressed="${on}"${ro && !on ? ' disabled' : ''}>`
+      + `<span class="c-map">${COURSE[t.id].svg(on)}<em>${THEME[t.theme].name}・${TIME[t.time]}</em><span class="c-diff" title="難易度 ${t.difficulty}">${stars(t.difficulty)}</span></span>`
+      + `<span class="c-body"><span class="c-h"><b>${esc(t.name)}</b></span>`
+      + `<span class="c-desc">${esc(t.desc)}</span>`
+      + `<span class="c-spec"><span>${COURSE[t.id].km} km</span><span>${t.laps}周</span>${mul > 1 ? `<span class="c-mul">コイン×${mul}</span>` : ''}</span>`
+      + `<span class="c-best">${foot}</span></span></button>`;
+  }).join('');
+  box.scrollLeft = x;
+  const c = $('.on', box);   // keep the pick in view horizontally only (scrollIntoView would also scroll #main)
+  if (c) {
+    const br = box.getBoundingClientRect(), cr = c.getBoundingClientRect();
+    if (cr.left < br.left || cr.right > br.right) box.scrollLeft += cr.left - br.left - (box.clientWidth - c.offsetWidth) / 2;
+  }
+}
+function pickTrack(tid) {
+  if (!TRACK_BY_ID[tid] || tid === save.lastTrack) return;
+  save.lastTrack = tid;
+  persist();
+  rerender();
+}
 
 function renderPrep(mode) {
   const sec = $('#scr-prep'), P = PREP[mode], p1 = save.selected.p1, p2 = save.selected.p2;
@@ -449,18 +495,19 @@ function renderPrep(mode) {
   if (mode === 'split') S2.set(p2, save.cars[p2].look);
   fillPicker('p1'); fillPicker('p2');
   $$('#cpuSeg button').forEach(b => b.classList.toggle('on', +b.dataset.n === cpuCount));
-  const ids = mode === 'split' ? [p1, p2] : [p1];
-  $('#prepRec').innerHTML = ids.map((id, i) => {
-    const r = save.cars[id];
-    return `<div class="rec">${mode === 'split' ? `<em class="p${i + 1}">P${i + 1}</em>` : ''}<span>ベストラップ <b>${fmt(r.bestLap)}</b></span><span>ベストレース <b>${fmt(r.bestRace)}</b></span></div>`;
+  const tid = curTrack(), ids = mode === 'split' ? [p1, p2] : [p1];
+  renderCourses($('#prepCourses'), tid, { ghost: mode === 'ghost' });
+  $('#prepRec').innerHTML = `<div class="rec-h">${esc(TRACK_BY_ID[tid].name)} の記録</div>` + ids.map((id, i) => {
+    const b = bestOf(id, tid);
+    return `<div class="rec">${mode === 'split' ? `<em class="p${i + 1}">P${i + 1}</em>` : ''}<span>ベストラップ <b>${fmt(b.lap)}</b></span><span>ベストレース <b>${fmt(b.race)}</b></span></div>`;
   }).join('');
   let ok = true;
   if (mode === 'ghost') {
-    const g = validGhost(p1);
+    const g = validGhost(p1, tid);
     ok = !!g;
     $('#ghostBox').innerHTML = g
-      ? `<div class="gh-ok"><span class="gh-ic"></span><div><b>ゴースト ${fmt(g.time)}</b><small>勝てば +${ECONOMY.beatGhostBonus} コイン</small></div></div>`
-      : '<div class="gh-none">まずこの車でソロかゴースト戦を1回完走しよう</div>';
+      ? `<div class="gh-ok"><span class="gh-ic"></span><div><b>ゴースト ${fmt(g.time)}</b><small>勝てば +${Math.round(ECONOMY.beatGhostBonus * coinMul(tid))} コイン</small></div></div>`
+      : '<div class="gh-none">まずこの車でこのコースをソロかゴースト戦で1回完走しよう</div>';
   }
   $('#btnStart').disabled = !ok;
   $('#prepKeys').innerHTML = mode === 'split' ? KEYS_SPLIT : KEYS_SOLO;
@@ -471,12 +518,13 @@ function player(p, name) {
   return { name, carId: id, look: { ...rec.look }, stats: computeStats(id, rec.nodes), control: p };
 }
 function startMode(mode) {
-  if (mode === 'solo') return launch({ mode, players: [player('p1', save.name)], cpuCount }, mode);
-  if (mode === 'split') return launch({ mode, players: [player('p1', save.name), player('p2', 'プレイヤー2')] }, mode);
+  const trackId = curTrack();
+  if (mode === 'solo') return launch({ mode, trackId, players: [player('p1', save.name)], cpuCount }, mode);
+  if (mode === 'split') return launch({ mode, trackId, players: [player('p1', save.name), player('p2', 'プレイヤー2')] }, mode);
   if (mode === 'ghost') {
-    const g = validGhost(save.selected.p1);
-    if (!g) { sfx.error(); toast('まずこの車でソロかゴースト戦を1回完走しよう', 'err'); return; }
-    return launch({ mode, players: [player('p1', save.name)], ghost: g }, mode);
+    const g = validGhost(save.selected.p1, trackId);
+    if (!g) { sfx.error(); toast('まずこの車でこのコースをソロかゴースト戦で1回完走しよう', 'err'); return; }
+    return launch({ mode, trackId, players: [player('p1', save.name)], ghost: g }, mode);
   }
 }
 
@@ -536,27 +584,31 @@ function onFinish(res) {
   showResults(res, rewards);
 }
 
+// Records, ghosts and the coin multiplier are per course (the one the UI launched).
+const raceTrack = () => (TRACK_BY_ID[race?.opts.trackId] ? race.opts.trackId : DEFAULT_TRACK);
 function applyRewards(res) {
-  const out = [], locals = res.locals || [], multi = locals.length > 1;
-  const firstClear = save.stats.races === 0;
+  const out = [], locals = res.locals || [], multi = locals.length > 1, tid = raceTrack(), mul = coinMul(tid);
+  const firstClear = save.stats.races === 0, coins = n => Math.round(n * mul);
   let finished = false, won = false;
+  if (mul > 1 && locals.some(L => L.time != null)) out.push({ label: `コース難易度 ${'★'.repeat(TRACK_BY_ID[tid].difficulty)} コイン×${mul}` });
   for (const L of locals) {
     const tag = multi ? `${String(L.control).toUpperCase()} ` : '';
     if (L.time == null) { out.push({ label: `${tag}リタイア` }); continue; }
     finished = true;
-    const pc = ECONOMY.placeCoins[L.place - 1] || 0;
+    const pc = coins(ECONOMY.placeCoins[L.place - 1] || 0);
     if (pc) { save.coins += pc; out.push({ label: `${tag}${L.place}位 賞金`, coins: pc }); }
     if (L.place === 1) { won = true; save.tickets += ECONOMY.winTickets; out.push({ label: `${tag}1位ボーナス`, tickets: ECONOMY.winTickets }); }
     const rec = save.cars[L.carId];
     if (!rec) continue;
-    if (L.bestLap != null && (rec.bestLap == null || L.bestLap < rec.bestLap)) {
-      rec.bestLap = L.bestLap;
-      save.coins += ECONOMY.bestLapBonus;
-      out.push({ label: `${tag}ベストラップ更新 ${fmt(L.bestLap)}`, coins: ECONOMY.bestLapBonus, hot: true });
+    const b = (rec.best ||= {})[tid] ||= { lap: null, race: null };
+    if (L.bestLap != null && (b.lap == null || L.bestLap < b.lap)) {
+      b.lap = L.bestLap;
+      save.coins += coins(ECONOMY.bestLapBonus);
+      out.push({ label: `${tag}ベストラップ更新 ${fmt(L.bestLap)}`, coins: coins(ECONOMY.bestLapBonus), hot: true });
     }
-    if (rec.bestRace == null || L.time < rec.bestRace) { rec.bestRace = L.time; out.push({ label: `${tag}自己ベスト更新 ${fmt(L.time)}`, hot: true }); }
+    if (b.race == null || L.time < b.race) { b.race = L.time; out.push({ label: `${tag}自己ベスト更新 ${fmt(L.time)}`, hot: true }); }
   }
-  if (res.beatGhost) { save.coins += ECONOMY.beatGhostBonus; out.push({ label: 'ゴースト撃破', coins: ECONOMY.beatGhostBonus, hot: true }); }
+  if (res.beatGhost) { save.coins += coins(ECONOMY.beatGhostBonus); out.push({ label: 'ゴースト撃破', coins: coins(ECONOMY.beatGhostBonus), hot: true }); }
   if (finished) {
     if (firstClear) { save.tickets += ECONOMY.firstClearTickets; out.push({ label: '初完走ボーナス', tickets: ECONOMY.firstClearTickets, hot: true }); }
     save.stats.races++;
@@ -564,8 +616,8 @@ function applyRewards(res) {
   }
   const g = res.ghostRecording;
   if (g && CAR_BY_ID[g.carId] && isFinite(g.time)) {
-    const old = validGhost(g.carId);
-    if (!old || g.time < old.time) out.push({ label: saveGhost(g.carId, g) ? (old ? 'ゴーストを更新しました' : 'ゴーストを保存しました') : 'ゴーストを保存できませんでした（容量不足）' });
+    const old = validGhost(g.carId, tid);
+    if (!old || g.time < old.time) out.push({ label: saveGhost(g.carId, tid, { ...g, trackId: tid }) ? (old ? 'ゴーストを更新しました' : 'ゴーストを保存しました') : 'ゴーストを保存できませんでした（容量不足）' });
   }
   persist();
   return out;
@@ -589,7 +641,7 @@ function showResults(res, rewards) {
   t.classList.toggle('win', win);
 
   const ghost = res.mode === 'ghost' ? race?.opts.ghost : null;
-  $('#rSub').innerHTML = locals.map(l => {
+  $('#rSub').innerHTML = `<div class="rs-course">${esc(TRACK_BY_ID[raceTrack()].name)}</div>` + locals.map(l => {
     const diff = ghost && l.time != null ? l.time - ghost.time : null;
     return `<div>${locals.length > 1 ? `${esc(String(l.control).toUpperCase())} ・ ` : ''}タイム <b>${fmt(l.time)}</b> ・ ベストラップ <b>${fmt(l.bestLap)}</b>${diff != null ? ` ・ ゴースト差 <b>${diff > 0 ? '+' : ''}${diff.toFixed(3)}</b>` : ''}</div>`;
   }).join('');
@@ -639,7 +691,14 @@ function renderOnline() {
   mount($('#onSlot'), [S1]);
   S1.set(id, save.cars[id].look);
   fillPicker('p1');
+  $('#onCoursePanel').hidden = !s;
   if (s) { $('#roomCode').textContent = s.code; renderRoster(); }
+}
+function renderLobbyCourses() {
+  const s = NET.s;
+  if (!s || cur !== 'online') return;
+  $('#onCourseNote').textContent = s.isHost ? 'コースを選ぶと全員に反映されます' : 'ホストがコースを選びます';
+  renderCourses($('#onCourses'), TRACK_BY_ID[s.trackId] ? s.trackId : DEFAULT_TRACK, { ro: !s.isHost });
 }
 function renderRoster() {
   const s = NET.s;
@@ -651,6 +710,7 @@ function renderRoster() {
     const c = CAR_BY_ID[r.carId];
     return `<li style="--rc:${c ? RARITY[c.rarity].color : '#667'}"><span class="slot">P${i + 1}</span><span class="nm">${esc(cleanName(r.name))}${i === 0 ? '<em class="host">HOST</em>' : ''}${r.pid === s.pid ? '<em class="you">YOU</em>' : ''}</span><span class="car">${c ? rb(c.rarity) + esc(c.name) : ''}</span></li>`;
   }).join('');
+  renderLobbyCourses();
   const go = $('#btnGo');
   go.hidden = !s.isHost;
   go.disabled = list.length < 2;
@@ -674,6 +734,7 @@ async function connect(host) {
       s.on('start', onNetStart),
       s.on('closed', onNetClosed),
     ];
+    if (s.isHost) s.setTrack?.(curTrack());
     myNet();
     status('');
     sfx.unlock();
@@ -720,7 +781,7 @@ function onNetStart(m) {
     };
   });
   if (cur !== 'online') show('online', false);
-  launch({ mode: 'online', players, net: s, localPid: s.pid }, 'online');
+  launch({ mode: 'online', trackId: TRACK_BY_ID[s.trackId] ? s.trackId : DEFAULT_TRACK, players, net: s, localPid: s.pid }, 'online');
 }
 
 /* ================= gacha ================= */
@@ -903,7 +964,7 @@ function renderGaDetail() {
     return;
   }
   const st = computeStats(id, rec.nodes);
-  $('#gaInfo').innerHTML = `<div class="abil" style="margin:0">${abilityHTML(st)}</div>${barsHTML(id, rec.nodes)}<div class="recs"><span>ベストラップ <b>${fmt(rec.bestLap)}</b></span><span>ベストレース <b>${fmt(rec.bestRace)}</b></span></div>`;
+  $('#gaInfo').innerHTML = `<div class="abil" style="margin:0">${abilityHTML(st)}</div>${barsHTML(id, rec.nodes)}<div class="crecs"><div class="crh"><span>コース記録</span><span>レース</span><span>ラップ</span></div>${TRACKS.map(t => { const b = bestOf(id, t.id); return `<div style="--tc:${THEME[t.theme].c}"><span>${esc(t.name)}</span><b>${fmt(b.race)}</b><b>${fmt(b.lap)}</b></div>`; }).join('')}</div>`;
   $('#lkBody').value = hex6(rec.look.body) || c.color;
   $('#lkWheel').value = hex6(rec.look.wheel) || '#222222';
   $('#lkWing').checked = !!rec.look.wing;
@@ -1043,6 +1104,14 @@ document.addEventListener('click', e => {
 });
 $('#btnBack').onclick = goBack;
 $('#btnStart').onclick = () => startMode(cur);
+$('#prepCourses').onclick = e => { const c = e.target.closest('[data-track]'); if (c) pickTrack(c.dataset.track); };
+$('#onCourses').onclick = e => {
+  const c = e.target.closest('[data-track]'), s = NET.s;
+  if (!c || !s?.isHost || !TRACK_BY_ID[c.dataset.track]) return;
+  save.lastTrack = c.dataset.track;
+  persist();
+  s.setTrack(save.lastTrack);   // re-broadcasts the roster (with trackId) -> renderRoster redraws the cards
+};
 $('#cpuSeg').onclick = e => { const b = e.target.closest('button'); if (b) { cpuCount = +b.dataset.n; renderPrep('solo'); } };
 
 // online
@@ -1131,7 +1200,7 @@ $('#setName').addEventListener('change', e => { e.target.value = setName(e.targe
 $('#setSound').addEventListener('change', e => { save.sound = e.target.checked; persist(); if (save.sound) sfx.coin(); });
 $('#setReset').onclick = async () => {
   if (!await ask({ title: 'データのリセット', html: '<p>コイン・チケット・車・スキル・記録・ゴーストがすべて消えます。<br>本当にリセットしますか？</p>', yes: 'リセットする', danger: true })) return;
-  CARS.forEach(c => saveGhost(c.id, null));
+  CARS.forEach(c => TRACKS.forEach(t => saveGhost(c.id, t.id, null)));
   save = resetSave();
   gaFocus = treeCar = null;
   refreshWallet();
@@ -1178,8 +1247,8 @@ addEventListener('keydown', e => {
 });
 
 /* ================= boot ================= */
-$('#trackMap').innerHTML = TRACK_MAP.svg;
-$('#trkInfo').innerHTML = `<span>全長 <b>${(TRACK_MAP.len / 1000).toFixed(2)} km</b></span><span>周回 <b>${TRACK.laps} 周</b></span><span>道幅 <b>${TRACK.width} m</b></span>`;
+$('#homeCourses').innerHTML = `<span class="tz-h"><small>COURSES</small><b>${TRACKS.length} コース</b><em>${TRACKS.map(t => THEME[t.theme].name).join('・')}</em></span>`
+  + `<span class="tz-maps">${TRACKS.map(t => `<i style="--tc:${THEME[t.theme].c}" title="${esc(t.name)}">${COURSE[t.id].svg(false)}</i>`).join('')}</span>`;
 preloadCarModels(CARS.map(c => c.id)).catch(() => {});
 show('home', false);
 requestAnimationFrame(loop);

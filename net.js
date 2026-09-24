@@ -2,15 +2,21 @@
 // WebRTC needs a TURN relay for those and the free ones are dead. Room code picks the broker (first char), so
 // host and guests always meet on the same one.
 // Topics under neongp26/<CODE>/:  room (retained, host alive)  h (guest -> host control)  a (host -> all control)
-//                                 g (game traffic from everyone: state / ability / finish)
+//                                 g (game traffic from everyone: state / ability / finish; the host's own 'go' copy)
 import { CAR_BY_ID, STARTER_CAR } from './data.js';
 import { newCarRec } from './save.js';
+import { TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
 
 const BROKERS = [
   'wss://broker.emqx.io:8084/mqtt',
   'wss://broker.hivemq.com:8884/mqtt',
   'wss://test.mosquitto.org:8081/mqtt',
 ];
+// broker.emqx.io silently drops whatever one client publishes beyond ~10 msg/s, QoS 1 included (measured: a 20 Hz
+// state stream lost half of the 'go' / 'finish' / 'results' messages sent alongside it; hivemq and mosquitto lost
+// none). So hosts try it last (the code -> broker mapping is unchanged), and on it states are thinned out.
+const HOST_ORDER = [1, 2, 0];
+const CAPPED = new Set([0]), CAPPED_STATE_MS = 150;
 const CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789';
 const MAX_PLAYERS = 4;
 const CONNECT_TIMEOUT = 10000;   // per broker
@@ -18,9 +24,13 @@ const FIND_TIMEOUT = 8000;       // no retained room message -> room doesn't exi
 const JOIN_TIMEOUT = 25000;      // whole join, incl. broker connect
 const RESULTS_WAIT = 30000;      // after the first finisher
 const HB_EVERY = 2000, HB_DEAD = 15000;   // generous: background tabs throttle timers
-const READY_WAIT = 20000;        // start without a player whose race is still loading after this
+// Start without a player whose race is still loading after this. A forced straggler counts 3-2-1 while the others
+// already drive, so wait out slow first-visit model downloads (players that vanish are dropped after HB_DEAD anyway).
+const READY_WAIT = 60000;
+const GO_ECHO_WAIT = 2500;       // host: start anyway if its own 'go' never comes back from the broker
 const HEX = /^#[0-9a-f]{6}$/i;
 const GAME = new Set(['state', 'ability', 'finish']);
+const isTrack = id => typeof id === 'string' && Object.hasOwn(TRACK_BY_ID, id);   // peer data: no 'constructor' etc.
 
 const brokerOf = code => CODE_CHARS.indexOf(code[0]) % BROKERS.length;
 const randId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -72,7 +82,8 @@ function connectBroker(url, will) {
   });
 }
 
-function wire(client, base, onMsg) {
+function wire(client, base, onMsg, capped) {
+  let lastState = 0;
   client.on('message', (topic, buf) => {
     const kind = topic.slice(base.length + 1);
     let m = null;
@@ -80,6 +91,7 @@ function wire(client, base, onMsg) {
     onMsg(kind, m);
   });
   const pub = (kind, m, opts = {}) => {
+    if (capped && m?.t === 'state') { const now = Date.now(); if (now - lastState < CAPPED_STATE_MS) return; lastState = now; }
     try { client.publish(`${base}/${kind}`, m == null ? '' : JSON.stringify(m), { qos: opts.qos ?? 1, retain: !!opts.retain }); }
     catch (e) { console.warn('[net] publish failed', e); }
   };
@@ -88,7 +100,8 @@ function wire(client, base, onMsg) {
 
 export async function hostRoom(name) {
   let client = null, code, pid = randId(), lastErr;
-  for (let b = 0; b < BROKERS.length && !client; b++) {
+  for (const b of HOST_ORDER) {
+    if (client) break;
     code = genCode(b);
     const room = `neongp26/${code}/room`;
     try { client = await connectBroker(BROKERS[b], { topic: room, payload: '', retain: true, qos: 1 }); }
@@ -107,8 +120,8 @@ export async function hostRoom(name) {
     if (closed || !m || typeof m.t !== 'string') return;
     if (kind === 'h') onControl(m);
     else if (kind === 'g') onGame(m);
-  });
-  const pushRoster = () => { pub('a', { t: 'roster', roster: s.roster }); emit('roster', s.roster); };
+  }, CAPPED.has(brokerOf(code)));
+  const pushRoster = () => { pub('a', { t: 'roster', roster: s.roster, trackId: s.trackId }); emit('roster', s.roster); };
   const setEntry = (p, me) => { s.roster = s.roster.map(e => (e.pid === p ? entry(p, { ...e, ...me }) : e)); pushRoster(); };
 
   function finishRace(r) {
@@ -145,7 +158,9 @@ export async function hostRoom(name) {
   function markReady(p) {
     const r = race;
     if (!r) return;
-    if (r.went) { if (p !== pid) pub('a', { t: 'go' }); return; }   // straggler after a forced start
+    // straggler after a forced start. The host itself too: its 'go' was emitted while its race was still loading,
+    // with nobody listening (if goSent is still false, the echo / goTimer delivers it, and the listener exists now).
+    if (r.went) { if (p !== pid) pub('a', { t: 'go' }); else if (r.goSent) emit('go', { t: 'go' }); return; }
     r.ready.add(p);
     checkReady();
   }
@@ -155,6 +170,15 @@ export async function hostRoom(name) {
     r.went = true;
     clearTimeout(r.readyTimer);
     pub('a', { t: 'go' });
+    // The host's own countdown starts when a copy of its 'go' comes back through the broker, i.e. when the guests
+    // get theirs; emitting it right away put the host a whole relay trip (~1 s measured) ahead of everyone else.
+    pub('g', { t: 'go', pid });
+    r.goTimer = setTimeout(() => hostGo(r), GO_ECHO_WAIT);
+  }
+  function hostGo(r) {
+    if (!r || r.goSent) return;
+    r.goSent = true;
+    clearTimeout(r.goTimer);
     emit('go', { t: 'go' });
   }
 
@@ -177,8 +201,9 @@ export async function hostRoom(name) {
 
   // Everyone's game traffic (the host's own comes back too: MQTT echoes to subscribers).
   function onGame(m) {
-    if (!GAME.has(m.t)) return;
     const p = String(m.pid ?? '');
+    if (m.t === 'go') { if (p === pid && race?.went) hostGo(race); return; }
+    if (!GAME.has(m.t)) return;
     if (p !== pid) {
       if (!inRoster(p)) return;
       seen.set(p, Date.now());
@@ -210,7 +235,7 @@ export async function hostRoom(name) {
     if (closed) return;
     closed = true;
     clearInterval(hb);
-    if (race) { clearTimeout(race.timer); clearTimeout(race.readyTimer); }
+    if (race) { clearTimeout(race.timer); clearTimeout(race.readyTimer); clearTimeout(race.goTimer); }
     race = null;
     removeEventListener('pagehide', close);
     pub('a', { t: 'closed' });
@@ -222,15 +247,17 @@ export async function hostRoom(name) {
   const s = {
     isHost: true, code, pid,
     roster: [entry(pid, { name })],
+    trackId: DEFAULT_TRACK,
+    setTrack(id) { if (isTrack(id) && !closed) { s.trackId = id; pushRoster(); } },
     on: ee.on,
     setMe: me => setEntry(pid, me),
     send: msg => { if (!closed && GAME.has(msg?.t)) pub('g', { ...msg, pid }, { qos: msg.t === 'state' ? 0 : 1 }); },
     ready: () => markReady(pid),
     startGame() {
-      if (race) { clearTimeout(race.timer); clearTimeout(race.readyTimer); }
+      if (race) { clearTimeout(race.timer); clearTimeout(race.readyTimer); clearTimeout(race.goTimer); }
       const r = race = { pids: s.roster.map(e => e.pid), times: new Map(), prog: new Map(), timer: null, ready: new Set(), went: false };
       r.readyTimer = setTimeout(() => { if (race === r) checkReady(true); }, READY_WAIT);
-      const m = { t: 'start', roster: s.roster };
+      const m = { t: 'start', roster: s.roster, trackId: s.trackId };
       pub('a', m);
       emit('start', m);
     },
@@ -272,6 +299,7 @@ export async function joinRoom(code, name, me = {}) {
     if (m.t === 'go') clearInterval(readyT);
     if (m.t === 'start') clearInterval(readyT);
     if (m.t === 'roster' || m.t === 'start') s.roster = Array.isArray(m.roster) ? m.roster : s.roster;
+    if ((m.t === 'roster' || m.t === 'start') && isTrack(m.trackId)) s.trackId = m.trackId;
     if (!joined) {
       if (m.t !== 'roster' || !s.roster.some(e => e.pid === pid)) return;
       joined = true;
@@ -280,7 +308,7 @@ export async function joinRoom(code, name, me = {}) {
       resolveJoin(s);
     }
     emit(m.t, m.t === 'roster' ? m.roster : m);
-  });
+  }, CAPPED.has(brokerOf(code)));
   const sayHello = () => pub('h', { t: 'hello', pid, name, carId: me.carId, look: me.look });
 
   function close() {
@@ -309,6 +337,7 @@ export async function joinRoom(code, name, me = {}) {
   const s = {
     isHost: false, code, pid,
     roster: [],
+    trackId: DEFAULT_TRACK,
     on: ee.on,
     setMe: m => pub('h', { ...m, t: 'me', pid }),
     ready() {   // repeat until the host's 'go' (a QoS1 publish can still be lost across a broker reconnect)

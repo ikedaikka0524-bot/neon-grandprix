@@ -1,8 +1,10 @@
 // Persistent player data (localStorage). Every read/write is try/catch'd: storage can be blocked.
 import { CAR_BY_ID, STARTER_CAR, ECONOMY } from './data.js';
+import { TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
 
 const KEY = 'crg.save.v1';
-const GHOST_KEY = id => 'crg.ghost.' + id;
+const GHOST_KEY = (carId, trackId) => `crg.ghost.${carId}.${trackId}`;
+const OLD_GHOST_KEY = carId => 'crg.ghost.' + carId;   // pre-courses: the single track = DEFAULT_TRACK
 
 function fresh() {
   return {
@@ -10,14 +12,27 @@ function fresh() {
     name: 'Player',
     coins: ECONOMY.startCoins,
     tickets: ECONOMY.startTickets,
-    cars: { [STARTER_CAR]: newCarRec(STARTER_CAR) },  // carId -> { dupes, nodes: [nodeId], look, bestLap, bestRace }
+    cars: { [STARTER_CAR]: newCarRec(STARTER_CAR) },  // carId -> { dupes, nodes: [nodeId], look, best: { [trackId]: { lap, race } } }
     selected: { p1: STARTER_CAR, p2: STARTER_CAR },
     stats: { races: 0, wins: 0 },
+    lastTrack: DEFAULT_TRACK,
   };
 }
 
 export function newCarRec(carId) {
-  return { dupes: 0, nodes: [], look: { body: CAR_BY_ID[carId].color, wheel: '#222222', wing: false }, bestLap: null, bestRace: null };
+  return { dupes: 0, nodes: [], look: { body: CAR_BY_ID[carId].color, wheel: '#222222', wing: false }, best: {} };
+}
+
+const minT = (a, b) => (a == null ? b ?? null : b == null ? a : Math.min(a, b));
+// Old single-track records (bestLap/bestRace) belong to DEFAULT_TRACK. Idempotent: an old tab may write them again.
+function migrateRec(rec) {
+  if (!rec.best || typeof rec.best !== 'object') rec.best = {};
+  if (rec.bestLap != null || rec.bestRace != null) {
+    const b = rec.best[DEFAULT_TRACK] ||= { lap: null, race: null };
+    b.lap = minT(b.lap, rec.bestLap);
+    b.race = minT(b.race, rec.bestRace);
+  }
+  delete rec.bestLap; delete rec.bestRace;
 }
 
 let data = null;
@@ -29,7 +44,9 @@ export function getSave() {
   // drop cars that no longer exist in data.js
   for (const id of Object.keys(data.cars)) if (!CAR_BY_ID[id]) delete data.cars[id];
   if (!Object.keys(data.cars).length) data.cars[STARTER_CAR] = newCarRec(STARTER_CAR);
+  for (const rec of Object.values(data.cars)) migrateRec(rec);
   for (const p of ['p1', 'p2']) if (!data.cars[data.selected[p]]) data.selected[p] = Object.keys(data.cars)[0];
+  if (!Object.hasOwn(TRACK_BY_ID, String(data.lastTrack))) data.lastTrack = DEFAULT_TRACK;
   return data;
 }
 
@@ -50,10 +67,24 @@ export function resetSave() {
   return getSave();
 }
 
-// Ghosts are stored per car under their own key so the main save stays small.
-export function loadGhost(carId) {
-  try { return JSON.parse(localStorage.getItem(GHOST_KEY(carId))); } catch { return null; }
+// Ghosts are stored per car and course under their own key so the main save stays small.
+export function loadGhost(carId, trackId = DEFAULT_TRACK) {
+  try {
+    const g = JSON.parse(localStorage.getItem(GHOST_KEY(carId, trackId)));
+    if (g || trackId !== DEFAULT_TRACK) return g;
+    const old = localStorage.getItem(OLD_GHOST_KEY(carId));
+    if (old == null) return null;
+    localStorage.setItem(GHOST_KEY(carId, trackId), old);
+    localStorage.removeItem(OLD_GHOST_KEY(carId));
+    return JSON.parse(old);
+  } catch { return null; }
 }
-export function saveGhost(carId, ghost) {
-  try { localStorage.setItem(GHOST_KEY(carId), JSON.stringify(ghost)); return true; } catch { return false; }
+// ghost null = delete.
+export function saveGhost(carId, trackId, ghost) {
+  try {
+    if (ghost == null) localStorage.removeItem(GHOST_KEY(carId, trackId));
+    else localStorage.setItem(GHOST_KEY(carId, trackId), JSON.stringify(ghost));
+    if (trackId === DEFAULT_TRACK) localStorage.removeItem(OLD_GHOST_KEY(carId));
+    return true;
+  } catch { return false; }
 }
