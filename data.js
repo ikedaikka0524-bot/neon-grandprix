@@ -63,7 +63,7 @@ export const SKILL_TREE = [
   ]},
   { branch: 'handling', name: 'ハンドリング', color: '#4dd4ff', nodes: [
     { id: 'h1', name: 'グリップ+6%',        mod: { grip: 0.06 } },
-    { id: 'h2', name: 'ドリフト',           mod: { steer: 0.10 }, desc: 'ハンドル+10%、ドリフトしやすく' },
+    { id: 'h2', name: 'ドリフト',           mod: { steer: 0.10 }, desc: 'ハンドル+10%、曲がりやすく' },
     { id: 'h3', name: 'ドリフトチャージ',   mod: { driftCharge: true }, desc: 'ドリフト中に能力ゲージが溜まる' },
     { id: 'h4', name: 'グリップ+10%',       mod: { grip: 0.10 } },
   ]},

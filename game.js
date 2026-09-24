@@ -1032,9 +1032,11 @@ function stepCar(ctx, car, dt) {
   const spd = Math.abs(vF);
   const off = car.offroad && !m.noOffroadPenalty;
   const grip = st.grip * m.gripMul * (spinning ? 0.2 : 1) * (off ? 0.85 : 1);
-  const steerRate = st.steer * Math.min(1, spd / 6) / (1 + spd / 42);
+  // higher grip keeps more steering authority at speed
+  const steerRate = st.steer * Math.min(1, spd / 6) / (1 + spd / (50 * grip));
   let yawT = c.steerS * steerRate * (vF < -0.5 ? -1 : 1);
-  if (!c.drift && !spinning && vF > 18 && Math.abs(c.steerS) > 0.75 && Math.abs(yawT * vF) > grip * 38) {
+  // drift only on purpose: hard steer + brake at speed (keyboard steering is always full lock)
+  if (!c.drift && !spinning && vF > 18 && Math.abs(c.steerS) > 0.6 && inp.brake > 0.3 && car.control !== 'cpu') {
     c.drift = true; c.driftDir = Math.sign(c.steerS); c.driftT = 0;
   }
   if (c.drift) {
@@ -1068,7 +1070,7 @@ function stepCar(ctx, car, dt) {
   if (spinning) vF *= Math.exp(-0.9 * dt);
 
   // lateral grip; part of the scrubbed sideways speed is turned forward, never adding energy
-  const k = spinning ? 1.2 : c.drift ? 1.6 + 2.2 * grip : 26 * grip;
+  const k = spinning ? 1.2 : c.drift ? 2.5 + 6 * grip : 30 * grip;
   const mag0 = Math.hypot(vF, vR);
   vR *= Math.exp(-k * dt);
   if (!spinning && vF > 2) {
