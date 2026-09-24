@@ -16,8 +16,8 @@ const KNOCK = { side: 12, spin: 0.4, keep: 0.7, again: 0.6 };   // robot hit: si
 // hellchain (m, s): pick a car ahead within range, snap when this close; tow spring point behind it, one lane beside it;
 // chain flight time; max slow on the target; tow spring 1/s^2 and its cap (x power) m/s^2
 // reel: extra closing speed over the target = min(reelMax, reel * (gap - follow)) x power/0.4 — the chain winds the owner in
-const HELL = { range: 80, snap: 6, follow: 7, lane: 3, hook: 0.2, maxDrag: 0.6, k: 4, pull: 150, reel: 1.0, reelMax: 45 };
-const HELL_SLING = { dur: 1.5, pow: 0.45 }, HELL_MISS = { dur: 1, pow: 0.15 };   // after the snap / nobody ahead or a shrugged-off chain
+const HELL = { range: 150, snap: 6, follow: 7, lane: 3, hook: 0.2, maxDrag: 0.6, k: 4, pull: 150, reel: 1.0, reelMax: 45 };
+const HELL_SLING = { dur: 2, pow: 0.6, whip: 1.0 }, HELL_MISS = { dur: 1, pow: 0.15 };   // after the snap / nobody ahead or a shrugged-off chain
 const LINKS = 240, LINK_PITCH = 0.36, CHAIN_SEG = 24;
 const CURB_CURV = 1 / 130, CURB_SPAN = 14;   // world.js lays curbs where |curv| exceeds this within ± this many samples
 const COLOR = {
@@ -1249,6 +1249,11 @@ function chainRelease(race, car, a, sling) {
     if (tg.ability) tg.ability.hit = 1;
     if (isHuman(tg)) flash(race, who(race, tg) + 'ガード!', COLOR.shield);
   }
+  // the snap whips the target round: a spin on the target's own client (every client runs the release; remote cars skip)
+  if (tg && sling && tg.control !== 'net' && !tg.finished && !chainProof(tg)) {
+    tg.spin = Math.max(tg.spin || 0, HELL_SLING.whip);
+    if (isHuman(tg)) flash(race, who(race, tg) + '鎖で振り回された!', COLOR.hellchain);
+  }
   a.chained = false; a.target = null; a.t = 0;
   a.active = a.activeMax = b.dur;
   a.power = b.pow;
@@ -1465,7 +1470,7 @@ export function updateAbilities(race, dt) {
   }
   S.fx.length = j;
 
-  const h = typeof window !== 'undefined' ? window.innerHeight * Math.min(window.devicePixelRatio || 1, 2) : 800;
+  const h = typeof window !== 'undefined' ? window.innerHeight * (race.pixelRatio ?? Math.min(window.devicePixelRatio || 1, 2)) : 800;
   const scale = h * 0.5 * (race.mode === 'split' ? 0.5 : 1);
   S.glow.update(dt, scale);
   S.smoke.update(dt, scale);

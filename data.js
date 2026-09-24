@@ -24,7 +24,7 @@ export const ABILITIES = {
   domain:   { name: '結界展開',     desc: '自分を中心に巨大な結界を展開。中の相手は大きく減速し能力を封印される。自分は加速', fill: 28, duration: 6, power: 0.45 }, // power = speed reduction inside (max 0.6)
   downforce: { name: 'ダウンフォース', desc: '5秒間グリップ最大。コーナーでも減速せずレールの上のように曲がれる', fill: 20, duration: 5, power: 1 },   // power = steering at speed +25% x power
   robotdash: { name: 'ロボット・ダッシュ', desc: 'ロボットに変形！5秒間ぶつかった車を弾き飛ばし、状態異常を受けない。車に戻る瞬間に大加速', fill: 22, duration: 5, power: 0.5 }, // duration = robot time, power = speed/accel bonus for 1.5 s after
-  hellchain: { name: 'ヘルチェーン', desc: '目の前の車に炎の鎖を撃ち込み、5秒間引っ張らせる。外れた瞬間に一気に追い抜く', fill: 22, duration: 5, power: 0.4 }, // duration = chain s, power = target slow (max 0.6) / tow up to target speed +25% x power
+  hellchain: { name: 'ヘルチェーン', desc: '150m先まで届く炎の鎖で前の車を捕まえ、5秒間引き寄せる。外れる瞬間に相手を振り回してスピンさせ、一気に追い抜く', fill: 18, duration: 5, power: 0.5 }, // duration = chain s, power = target slow (max 0.6) / tow up to target speed +25% x power
 };
 
 // Passive traits (R cars).
