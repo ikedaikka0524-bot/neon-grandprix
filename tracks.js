@@ -1,6 +1,7 @@
 // Courses. Centerline control points [x, y, z] form a closed centripetal CatmullRom loop, first point = start line.
 // Checked by tools/check-tracks: no self-overlap (walls included), min corner radius, max grade.
-// grip: surface multiplier applied to every car's grip. theme drives sky, light, terrain and scenery in game.js.
+// grip: surface multiplier applied to every car's grip. theme = base look (sky, light, terrain, scenery; world.js);
+// scenery (optional) = scenery/<id>.js layered over that base (real circuits).
 
 export const TRACKS = [
   {
@@ -52,7 +53,7 @@ export const TRACKS = [
   },
   {
     id: 'nring', name: 'ニュルブルクリンク GP', desc: '実在のドイツGPコースを実寸で再現。全長5.1km、ヘアピンとシケインが続く。',
-    theme: 'forest', time: 'day', difficulty: 3, width: 14, laps: 2, grip: 1,
+    theme: 'forest', time: 'day', scenery: 'nring', difficulty: 3, width: 14, laps: 2, grip: 1,
     // traced from the Current_GP layout of a Nurburgring SVG at real scale (4.87 m per svg unit -> 5140 m vs real 5148 m)
     points: [
       [0, 0, 0], [-14, 0, -14], [-27, 0, -28], [-41, 0, -42], [-54, 0, -56], [-68, 0, -70], [-81, 0, -84], [-95, 0, -98],
@@ -92,10 +93,10 @@ export const TRACKS = [
   },
 
   // ---- Real F1 circuits at real scale (centrelines from github.com/bacinger/f1-circuits, MIT, (c) Tomislav Bacinger;
-  //      see THIRD_PARTY_NOTICES.md). Scenery reuses the forest theme. Street circuits use a tight wallGap.
+  //      see THIRD_PARTY_NOTICES.md). Scenery: scenery/<id>.js over the base theme. Street circuits use a tight wallGap.
   {
     id: 'bahrain', name: 'バーレーン', desc: '砂漠の中の高速サーキット。長いストレートと急ブレーキ。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits bh-2002
+    theme: 'desert', time: 'night', scenery: 'bahrain', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits bh-2002
     points: [
       [0, 0, 0], [1, 0, -20], [1, 0, -40], [2, 0, -60], [2, 0, -80], [3, 0, -100], [3, 0, -120], [4, 0, -140],
       [4, 0, -160], [5, 0, -180], [6, 0, -200], [6, 0, -220], [7, 0, -240], [7, 0, -260], [8, 0, -280], [8, 0, -300],
@@ -135,7 +136,7 @@ export const TRACKS = [
   },
   {
     id: 'albertpark', name: 'アルバート・パーク', desc: '公園の湖を一周する流れるようなコース。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits au-1953
+    theme: 'forest', time: 'day', scenery: 'albertpark', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits au-1953
     points: [
       [0, 0, 0], [-14, 0, -14], [-29, 0, -28], [-43, 0, -42], [-57, 0, -56], [-71, 0, -70], [-86, 0, -84], [-100, 0, -98],
       [-114, 0, -112], [-128, 0, -127], [-142, 0, -141], [-156, 0, -155], [-170, 0, -169], [-184, 0, -184], [-198, 0, -198], [-212, 0, -212],
@@ -174,7 +175,7 @@ export const TRACKS = [
   },
   {
     id: 'sepang', name: 'セパン', desc: '平行する2本の長いストレートとヘアピンが名物。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits my-1999
+    theme: 'beach', time: 'day', scenery: 'sepang', label: '熱帯', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits my-1999
     points: [
       [0, 0, 0], [-20, 0, 2], [-40, 0, 3], [-60, 0, 5], [-80, 0, 7], [-100, 0, 8], [-120, 0, 10], [-140, 0, 11],
       [-160, 0, 13], [-180, 0, 15], [-199, 0, 16], [-219, 0, 18], [-239, 0, 20], [-259, 0, 21], [-279, 0, 23], [-299, 0, 24],
@@ -215,7 +216,7 @@ export const TRACKS = [
   },
   {
     id: 'shanghai', name: '上海', desc: 'カタツムリのような1コーナーと超ロングストレート。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits cn-2004
+    theme: 'forest', time: 'day', scenery: 'shanghai', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits cn-2004
     points: [
       [0, 0, 0], [-19, 0, 5], [-39, 0, 10], [-58, 0, 14], [-78, 0, 19], [-97, 0, 23], [-117, 0, 25], [-137, 0, 22],
       [-155, 0, 15], [-173, 0, 5], [-188, 0, -7], [-199, 0, -24], [-207, 0, -42], [-210, 0, -62], [-209, 0, -81], [-205, 0, -101],
@@ -255,7 +256,7 @@ export const TRACKS = [
   },
   {
     id: 'catalunya', name: 'カタロニア', desc: '高速コーナーと低速セクションが揃うテストコースの定番。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits es-1991
+    theme: 'desert', time: 'day', scenery: 'catalunya', label: '丘陵', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits es-1991
     points: [
       [0, 0, 0], [-11, 0, 17], [-21, 0, 34], [-32, 0, 51], [-43, 0, 67], [-53, 0, 84], [-64, 0, 101], [-75, 0, 118],
       [-86, 0, 135], [-96, 0, 152], [-107, 0, 169], [-118, 0, 185], [-128, 0, 202], [-139, 0, 219], [-149, 0, 236], [-160, 0, 253],
@@ -291,7 +292,7 @@ export const TRACKS = [
   },
   {
     id: 'monaco', name: 'モナコ', desc: '港町の狭い公道コース。ヘアピンとトンネル区間。',
-    theme: 'forest', time: 'day', difficulty: 3, width: 11, laps: 2, grip: 1, wallGap: 1.5, // real layout: bacinger/f1-circuits mc-1929
+    theme: 'beach', time: 'day', scenery: 'monaco', difficulty: 3, width: 11, laps: 2, grip: 1, wallGap: 1.5, // real layout: bacinger/f1-circuits mc-1929
     points: [
       [0, 0, 0], [1, 0, -27], [14, 0, -50], [30, 0, -72], [47, 0, -93], [62, 0, -115], [78, 0, -136], [95, 0, -158],
       [111, 0, -180], [127, 0, -201], [143, 0, -223], [159, 0, -244], [182, 0, -254], [203, 0, -239], [211, 0, -213], [215, 0, -188],
@@ -318,7 +319,7 @@ export const TRACKS = [
   },
   {
     id: 'istanbul', name: 'イスタンブール', desc: '4つの頂点を持つ超ロングコーナー「ターン8」。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits tr-2005
+    theme: 'desert', time: 'day', scenery: 'istanbul', label: '丘陵', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits tr-2005
     points: [
       [0, 0, 0], [20, 0, -4], [39, 0, -9], [59, 0, -13], [78, 0, -17], [98, 0, -21], [117, 0, -26], [137, 0, -30],
       [156, 0, -34], [176, 0, -39], [195, 0, -43], [215, 0, -47], [234, 0, -53], [248, 0, -66], [250, 0, -85], [245, 0, -104],
@@ -358,7 +359,7 @@ export const TRACKS = [
   },
   {
     id: 'montreal', name: 'モントリオール', desc: '島の上のストップ＆ゴー。最終シケインに注意。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, wallGap: 5, // real layout: bacinger/f1-circuits ca-1978
+    theme: 'forest', time: 'day', scenery: 'montreal', difficulty: 2, width: 14, laps: 2, grip: 1, wallGap: 5, // real layout: bacinger/f1-circuits ca-1978
     points: [
       [0, 0, 0], [4, 0, 20], [8, 0, 39], [13, 0, 59], [17, 0, 78], [21, 0, 98], [25, 0, 117], [30, 0, 137],
       [34, 0, 157], [38, 0, 176], [42, 0, 196], [45, 0, 215], [49, 0, 235], [51, 0, 255], [52, 0, 275], [52, 0, 295],
@@ -392,7 +393,7 @@ export const TRACKS = [
   },
   {
     id: 'silverstone', name: 'シルバーストーン', desc: '空軍基地跡の超高速コーナー群。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits gb-1948
+    theme: 'forest', time: 'day', scenery: 'silverstone', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits gb-1948
     points: [
       [0, 0, 0], [20, 0, -2], [40, 0, -3], [60, 0, -5], [80, 0, -7], [100, 0, -9], [120, 0, -10], [140, 0, -12],
       [159, 0, -14], [179, 0, -16], [199, 0, -15], [219, 0, -14], [238, 0, -8], [256, 0, 1], [270, 0, 15], [283, 0, 30],
@@ -435,7 +436,7 @@ export const TRACKS = [
   },
   {
     id: 'hockenheim', name: 'ホッケンハイム', desc: 'ヘアピンと長い全開区間、スタジアムセクション。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, wallGap: 6, // real layout: bacinger/f1-circuits de-1932
+    theme: 'forest', time: 'day', scenery: 'hockenheim', difficulty: 2, width: 14, laps: 2, grip: 1, wallGap: 6, // real layout: bacinger/f1-circuits de-1932
     points: [
       [0, 0, 0], [-9, 0, -18], [-18, 0, -36], [-27, 0, -54], [-36, 0, -72], [-44, 0, -90], [-53, 0, -108], [-62, 0, -126],
       [-72, 0, -143], [-81, 0, -161], [-91, 0, -178], [-100, 0, -196], [-110, 0, -214], [-118, 0, -232], [-113, 0, -251], [-105, 0, -269],
@@ -470,7 +471,7 @@ export const TRACKS = [
   },
   {
     id: 'hungaroring', name: 'ハンガロリンク', desc: '抜きにくいテクニカルなコース。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits hu-1986
+    theme: 'forest', time: 'day', scenery: 'hungaroring', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits hu-1986
     points: [
       [0, 0, 0], [-16, 0, -12], [-31, 0, -25], [-47, 0, -37], [-63, 0, -50], [-78, 0, -62], [-94, 0, -75], [-110, 0, -87],
       [-125, 0, -100], [-141, 0, -112], [-157, 0, -124], [-172, 0, -137], [-188, 0, -149], [-204, 0, -162], [-220, 0, -174], [-235, 0, -186],
@@ -504,7 +505,7 @@ export const TRACKS = [
   },
   {
     id: 'spa', name: 'スパ・フランコルシャン', desc: '7kmの森の超高速コース。オー・ルージュ。',
-    theme: 'forest', time: 'day', difficulty: 3, width: 14, laps: 1, grip: 1, // real layout: bacinger/f1-circuits be-1925
+    theme: 'forest', time: 'day', scenery: 'spa', difficulty: 3, width: 14, laps: 1, grip: 1, // real layout: bacinger/f1-circuits be-1925
     points: [
       [0, 0, 0], [-10, 0, -17], [-20, 0, -35], [-30, 0, -52], [-40, 0, -69], [-50, 0, -87], [-60, 0, -104], [-70, 0, -121],
       [-80, 0, -139], [-90, 0, -156], [-100, 0, -173], [-110, 0, -190], [-113, 0, -209], [-96, 0, -217], [-78, 0, -209], [-60, 0, -200],
@@ -554,7 +555,7 @@ export const TRACKS = [
   },
   {
     id: 'monza', name: 'モンツァ', desc: '最高速の聖地。シケインでのブレーキ勝負。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits it-1922
+    theme: 'forest', time: 'day', scenery: 'monza', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits it-1922
     points: [
       [0, 0, 0], [2, 0, -20], [3, 0, -40], [5, 0, -60], [7, 0, -80], [9, 0, -100], [10, 0, -120], [12, 0, -140],
       [14, 0, -160], [15, 0, -180], [17, 0, -199], [19, 0, -219], [21, 0, -239], [22, 0, -259], [24, 0, -279], [26, 0, -299],
@@ -596,7 +597,7 @@ export const TRACKS = [
   },
   {
     id: 'marinabay', name: 'マリーナベイ', desc: '直角コーナーだらけのナイト市街地コース。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits sg-2008
+    theme: 'city', time: 'night', scenery: 'marinabay', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits sg-2008
     points: [
       [0, 0, 0], [3, 0, 20], [5, 0, 40], [8, 0, 59], [10, 0, 79], [13, 0, 99], [16, 0, 119], [18, 0, 139],
       [21, 0, 158], [23, 0, 178], [26, 0, 198], [29, 0, 218], [31, 0, 238], [29, 0, 257], [18, 0, 274], [7, 0, 291],
@@ -633,7 +634,7 @@ export const TRACKS = [
   },
   {
     id: 'suzuka', name: '鈴鹿', desc: '立体交差の8の字コース。S字と130R。',
-    theme: 'forest', time: 'day', difficulty: 3, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits jp-1962
+    theme: 'forest', time: 'day', scenery: 'suzuka', difficulty: 3, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits jp-1962
     points: [
       [0, 0, 0], [13, 0, 15], [26, 0, 31], [38, 0, 46], [51, 0, 61], [64, 0, 77], [77, 0, 92], [90, 0, 107],
       [103, 0, 123], [115, 0, 138], [128, 0, 153], [141, 0, 169], [154, 0, 184], [166, 0, 200], [179, 0, 215], [192, 0, 231],
@@ -676,7 +677,7 @@ export const TRACKS = [
   },
   {
     id: 'interlagos', name: 'インテルラゴス', desc: '反時計回りのアップダウン。セナS。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits br-1940
+    theme: 'forest', time: 'day', scenery: 'interlagos', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits br-1940
     points: [
       [0, 0, 0], [5, 0, 19], [10, 0, 39], [15, 0, 58], [20, 0, 77], [25, 0, 97], [30, 0, 116], [35, 0, 136],
       [40, 0, 155], [45, 0, 174], [50, 0, 194], [55, 0, 213], [61, 0, 232], [66, 0, 252], [75, 0, 269], [87, 0, 285],
@@ -709,7 +710,7 @@ export const TRACKS = [
   },
   {
     id: 'yasmarina', name: 'ヤス・マリーナ', desc: 'ホテルをくぐる夕暮れのコース。長いストレート＋ヘアピン。',
-    theme: 'forest', time: 'day', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits ae-2009
+    theme: 'desert', time: 'sunset', scenery: 'yasmarina', difficulty: 2, width: 14, laps: 2, grip: 1, // real layout: bacinger/f1-circuits ae-2009
     points: [
       [0, 0, 0], [20, 0, -3], [40, 0, -5], [59, 0, -8], [79, 0, -11], [99, 0, -13], [119, 0, -16], [139, 0, -19],
       [159, 0, -21], [178, 0, -24], [198, 0, -27], [218, 0, -29], [238, 0, -32], [256, 0, -40], [267, 0, -56], [269, 0, -76],

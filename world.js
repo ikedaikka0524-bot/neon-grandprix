@@ -222,20 +222,31 @@ const FOREST = {
   },
 };
 
-// Exported so a test page can register an extra theme; the course themes load on first use.
-export const THEMES = { forest: Promise.resolve(FOREST) };
-const themeFails = {};
-function loadTheme(name) {
+// Exported so a test page can register an extra theme / scenery; modules load on first use.
+// Scenery modules (scenery/<id>.js, per real circuit): { base, env /* deep-merged over the base env */, baseBuild, build(api) }.
+export const THEMES = { forest: Promise.resolve(FOREST) }, SCENERY = {};
+const fails = {};
+function load(cache, key, url, ok, fallback) {
   // a failed fetch stays failed in the module map under its URL: after a failure, the next race retries with a fresh one
-  const p = THEMES[name] ??= import(`./theme-${name}.js${themeFails[name] ? `?retry=${themeFails[name]}` : ''}`).then(m => {
-    if (!m.default?.env || typeof m.default.build !== 'function') throw new Error('bad theme module');
+  const p = cache[key] ??= import(`${url}${fails[url] ? `?retry=${fails[url]}` : ''}`).then(m => {
+    if (!ok(m.default)) throw new Error('bad module');
     return m.default;
   });
-  return Promise.resolve(p).catch(err => {   // a broken theme must not stop the race
-    console.warn(`[world] theme '${name}' failed, using forest`, err);
-    if (THEMES[name] === p) { delete THEMES[name]; themeFails[name] = (themeFails[name] || 0) + 1; }
-    return FOREST;
+  return Promise.resolve(p).catch(err => {   // a broken module must not stop the race
+    console.warn(`[world] ${url} failed, falling back`, err);
+    if (cache[key] === p) { delete cache[key]; fails[url] = (fails[url] || 0) + 1; }
+    return fallback;
   });
+}
+const loadTheme = name => load(THEMES, name, `./theme-${name}.js`, m => m?.env && typeof m.build === 'function', FOREST);
+const loadScenery = id => load(SCENERY, id, `./scenery/${id}.js`, m => typeof m?.build === 'function', null);
+
+// plain objects merge key by key; arrays, functions and values replace
+const isObj = v => v && typeof v === 'object' && !Array.isArray(v);
+function deepMerge(a, b = {}) {
+  const out = { ...a };
+  for (const k in b) out[k] = isObj(a?.[k]) && isObj(b[k]) ? deepMerge(a[k], b[k]) : b[k];
+  return out;
 }
 
 // Missing env fields fall back to the forest look (the ground painter is never inherited).
@@ -250,9 +261,10 @@ function mergeEnv(env = {}) {
 // buildWorld
 // ======================================================================================
 export async function buildWorld(ctx, def) {
-  const theme = await loadTheme(def.theme || 'forest');
+  const scenery = def.scenery ? await loadScenery(def.scenery) : null;   // null (missing / broken) -> plain base theme
+  const theme = await loadTheme(scenery?.base || def.theme || 'forest');
   if (ctx.dead) return { update() {} };   // race stopped while the theme was loading
-  const env = ctx.env = mergeEnv(theme.env);
+  const env = ctx.env = mergeEnv(scenery ? deepMerge(theme.env, scenery.env) : theme.env);
   const { track, world, scene, renderer } = ctx;
   const S = track.samples, N = track.N, W = track.width, W2 = W / 2, night = !!env.night;
   const rnd = seeded(20260924);
@@ -400,7 +412,7 @@ export async function buildWorld(ctx, def) {
   // theme scenery
   const blockers = [], updaters = [];
   const api = {
-    THREE, world, track, def, env, rnd, night,
+    THREE, world, track, def, env, rnd, night, base: theme,
     near, groundAt, canvasTex,
     isFree: (x, z, r = 0) => near(x, z)[0] >= W2 + 12 + r && !blockers.some(b => (b.x - x) ** 2 + (b.z - z) ** 2 < (b.r + r) ** 2),
     block: (x, z, r) => { blockers.push({ x, z, r }); },
@@ -415,8 +427,9 @@ export async function buildWorld(ctx, def) {
     },
     onUpdate: fn => { updaters.push(fn); },
   };
-  try { theme.build(api); } catch (err) { console.warn(`[world] theme '${def.theme}' build failed`, err); }
-  splitGround(ground, world);   // after the theme: it may recolour "the big terrain sheet"
+  if (scenery?.baseBuild !== false) try { theme.build(api); } catch (err) { console.warn(`[world] theme '${def.theme}' build failed`, err); }
+  if (scenery) try { scenery.build(api); } catch (err) { console.warn(`[world] scenery '${def.scenery}' build failed`, err); }
+  splitGround(ground, world);   // after the theme + scenery: they may recolour "the big terrain sheet"
   return {
     update(dt, time) {
       for (let i = updaters.length - 1; i >= 0; i--) {
