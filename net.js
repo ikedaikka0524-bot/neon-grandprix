@@ -127,6 +127,7 @@ export async function hostRoom(name) {
   function finishRace(r) {
     if (race !== r) return;
     clearTimeout(r.timer);
+    clearInterval(r.startTimer);
     race = null;
     const prog = p => r.prog.get(p) ?? -1;
     const placements = r.pids
@@ -135,6 +136,8 @@ export async function hostRoom(name) {
     const m = { t: 'results', placements };
     pub('a', m);
     emit('results', m);
+    // the broker can drop a QoS1 message: repeat (games ignore duplicates) unless a new race already started
+    for (const d of [1500, 4000]) setTimeout(() => { if (!closed && !race) pub('a', m); }, d);
   }
   // Deferred so a 'results' never fires re-entrantly inside the host game's own send().
   function checkDone() {
@@ -169,6 +172,7 @@ export async function hostRoom(name) {
     if (!r || r.went || !(force || r.pids.every(p => r.ready.has(p) || !inRoster(p)))) return;
     r.went = true;
     clearTimeout(r.readyTimer);
+    clearInterval(r.startTimer);
     pub('a', { t: 'go' });
     // The host's own countdown starts when a copy of its 'go' comes back through the broker, i.e. when the guests
     // get theirs; emitting it right away put the host a whole relay trip (~1 s measured) ahead of everyone else.
@@ -212,8 +216,10 @@ export async function hostRoom(name) {
     const r = race;
     if (!r || !r.pids.includes(p)) return;
     if (m.t === 'state' && Number.isFinite(m.p)) r.prog.set(p, m.p);
-    if (m.t === 'finish' && Number.isFinite(m.time) && !r.times.has(p)) {
-      r.times.set(p, m.time);
+    // finish time from 'finish' or piggybacked on 'state' (ft): either one getting through is enough
+    const ft = m.t === 'finish' ? m.time : m.t === 'state' ? m.ft : NaN;
+    if (Number.isFinite(ft) && !r.times.has(p)) {
+      r.times.set(p, ft);
       r.timer ??= setTimeout(() => finishRace(r), RESULTS_WAIT);
       checkDone();
     }
@@ -235,7 +241,7 @@ export async function hostRoom(name) {
     if (closed) return;
     closed = true;
     clearInterval(hb);
-    if (race) { clearTimeout(race.timer); clearTimeout(race.readyTimer); clearTimeout(race.goTimer); }
+    if (race) { clearTimeout(race.timer); clearTimeout(race.readyTimer); clearTimeout(race.goTimer); clearInterval(race.startTimer); }
     race = null;
     removeEventListener('pagehide', close);
     pub('a', { t: 'closed' });
@@ -251,15 +257,22 @@ export async function hostRoom(name) {
     setTrack(id) { if (isTrack(id) && !closed) { s.trackId = id; pushRoster(); } },
     on: ee.on,
     setMe: me => setEntry(pid, me),
-    send: msg => { if (!closed && GAME.has(msg?.t)) pub('g', { ...msg, pid }, { qos: msg.t === 'state' ? 0 : 1 }); },
+    send: msg => {
+      if (closed || !GAME.has(msg?.t)) return;
+      const m = { ...msg, pid };
+      pub('g', m, { qos: m.t === 'state' ? 0 : 1 });
+      onGame(m);   // count the host's own finish now instead of trusting the broker echo
+    },
     ready: () => markReady(pid),
     startGame() {
-      if (race) { clearTimeout(race.timer); clearTimeout(race.readyTimer); clearTimeout(race.goTimer); }
+      if (race) { clearTimeout(race.timer); clearTimeout(race.readyTimer); clearTimeout(race.goTimer); clearInterval(race.startTimer); }
       const r = race = { pids: s.roster.map(e => e.pid), times: new Map(), prog: new Map(), timer: null, ready: new Set(), went: false };
       r.readyTimer = setTimeout(() => { if (race === r) checkReady(true); }, READY_WAIT);
-      const m = { t: 'start', roster: s.roster, trackId: s.trackId };
+      const m = { t: 'start', roster: s.roster, trackId: s.trackId, rid: randId() };
       pub('a', m);
       emit('start', m);
+      // repeat until everyone is loaded (guests start a given rid only once)
+      r.startTimer = setInterval(() => { if (race === r && !r.went) pub('a', m); else clearInterval(r.startTimer); }, 3000);
     },
     close,
   };
@@ -274,7 +287,7 @@ export async function joinRoom(code, name, me = {}) {
   const client = await connectBroker(BROKERS[brokerOf(code)], { topic: `${base}/h`, payload: JSON.stringify({ t: 'bye', pid }), qos: 1, retain: false });
 
   const ee = emitter();
-  let joined = false, found = false, closed = false, last = Date.now(), hb = 0, helloT = 0, readyT = 0, resolveJoin, rejectJoin;
+  let joined = false, found = false, closed = false, last = Date.now(), hb = 0, helloT = 0, readyT = 0, lastRid = null, resolveJoin, rejectJoin;
   const joinP = new Promise((res, rej) => { resolveJoin = res; rejectJoin = rej; });
   const emit = (t, p) => { if (!closed) ee.emit(t, p); };
   const findT = setTimeout(() => { if (!found) fail('部屋が見つかりません'); }, FIND_TIMEOUT);
@@ -296,8 +309,12 @@ export async function joinRoom(code, name, me = {}) {
     if (m.t === 'hb') return;
     if (m.t === 'full') { if (m.to === pid) fail(m.started ? 'レースが始まっています' : '満員です'); return; }
     if (m.t === 'closed') return lost();
+    if (m.t === 'start') {
+      if (m.rid && m.rid === lastRid) return;   // host repeats 'start' until everyone is ready
+      lastRid = m.rid;
+      clearInterval(readyT);
+    }
     if (m.t === 'go') clearInterval(readyT);
-    if (m.t === 'start') clearInterval(readyT);
     if (m.t === 'roster' || m.t === 'start') s.roster = Array.isArray(m.roster) ? m.roster : s.roster;
     if ((m.t === 'roster' || m.t === 'start') && isTrack(m.trackId)) s.trackId = m.trackId;
     if (!joined) {

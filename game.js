@@ -1065,6 +1065,7 @@ function hookNet(ctx) {
     if (b.length > 40) b.shift();
     if (Number.isFinite(msg.lap)) car.lap = msg.lap;
     if (Number.isFinite(msg.p)) car.progress = msg.p;
+    if (Number.isFinite(msg.ft) && !car.finished) { car.finished = true; car.finishTime = msg.ft; }
   });
   on('go', () => { if (!ctx.goAt) ctx.goAt = performance.now() + 3900; });   // same 3.9 s lead-in as offline
   on('ability', msg => { if (R === ctx && String(msg.pid) !== String(race.localPid)) applyRemoteAbility(race, msg); });
@@ -1250,8 +1251,15 @@ function update(ctx, dt) {
     const p1 = cars.find(c => c.control === 'p1');
     if (p1 && ctx.netAcc >= 0.05) {
       ctx.netAcc = 0;
-      try { race.net.send({ t: 'state', pid: race.localPid, x: r2(p1.pos.x), y: r2(p1.pos.y), z: r2(p1.pos.z), h: r3(p1.heading), s: r2(p1.speed), lap: p1.lap, p: r3(p1.progress) }); }
+      // ft: the public broker has been seen to ack and then drop a single QoS1 'finish', so the finish time also rides
+      // on every state message, and 'finish' itself is repeated until results arrive
+      const ft = p1.finished ? { ft: r3(p1.finishTime) } : null;
+      try { race.net.send({ t: 'state', pid: race.localPid, x: r2(p1.pos.x), y: r2(p1.pos.y), z: r2(p1.pos.z), h: r3(p1.heading), s: r2(p1.speed), lap: p1.lap, p: r3(p1.progress), ...ft }); }
       catch (e) { if (ctx.errors++ < 3) console.warn(e); }
+      if (ft && !ctx.finalized && ctx.clock - (ctx.finishSentAt ?? 0) > 2) {
+        ctx.finishSentAt = ctx.clock;
+        try { race.net.send({ t: 'finish', pid: race.localPid, time: ft.ft }); } catch (e) { console.warn(e); }
+      }
     }
   }
   checkFinalize(ctx);
