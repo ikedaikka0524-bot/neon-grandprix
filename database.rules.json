@@ -1,0 +1,948 @@
+{
+  "rules": {
+    "lb": {
+      ".read": true,
+      "circuit": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 27.36 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 9.12 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "city": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 30.85 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 10.28 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "canyon": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 25.71 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 12.85 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "snow": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 20.69 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 10.34 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "coast": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 35.01 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 11.67 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "nring": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 85.52 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 42.76 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "bahrain": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 89.75 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 44.87 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "albertpark": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 87.47 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 43.73 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "sepang": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 92.09 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 46.04 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "shanghai": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 90.22 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 45.11 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "catalunya": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 77.39 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 38.69 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "monaco": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 73.96 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 36.98 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "istanbul": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 88.01 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 44 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "montreal": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 72.17 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 36.08 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "silverstone": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 97.46 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 48.73 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "hockenheim": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 75.55 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 37.77 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "hungaroring": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 72.55 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 36.27 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "spa": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 57.83 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 57.83 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "monza": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 95.96 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 47.98 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "marinabay": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 81.76 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 40.88 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "suzuka": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 96.45 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 48.22 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "interlagos": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 71.21 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 35.6 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      },
+      "yasmarina": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ],
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['name', 'race', 'raceCar', 'raceAt', 'lap', 'lapCar', 'lapAt', 'v'])",
+            "name": {
+              ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 12"
+            },
+            "race": {
+              ".validate": "newData.isNumber() && newData.val() >= 87.72 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "raceCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "raceAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "lap": {
+              ".validate": "newData.isNumber() && newData.val() >= 43.86 && newData.val() < 3600 && (!data.exists() || newData.val() <= data.val())"
+            },
+            "lapCar": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "lapAt": {
+              ".validate": "newData.isNumber() && (newData.val() == now || newData.val() == data.val())"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      }
+    },
+    "ghosts": {
+      ".read": true,
+      "$t": {
+        "$b": {
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['data', 'time', 'carId', 'look', 'trackId', 'v']) && newData.child('time').val() == newData.parent().parent().parent().parent().child('lb/' + $t + '/' + $b + '/' + $uid + '/race').val()",
+            "data": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 204800"
+            },
+            "time": {
+              ".validate": "newData.isNumber()"
+            },
+            "carId": {
+              ".validate": "newData.isString() && newData.val().matches(/^(n|r|sr|ur)_[a-z0-9_]{1,21}$/) && ($b == 'all' || ($b == 'N' && newData.val().beginsWith('n_')) || ($b == 'R' && newData.val().beginsWith('r_')) || ($b == 'SR' && newData.val().beginsWith('sr_')) || ($b == 'UR' && newData.val().beginsWith('ur_')))"
+            },
+            "look": {
+              ".validate": "newData.hasChildren(['body', 'wheel', 'wing'])",
+              "body": {
+                ".validate": "newData.isString() && newData.val().matches(/^#[0-9a-fA-F]{6}$/)"
+              },
+              "wheel": {
+                ".validate": "newData.isString() && newData.val().matches(/^#[0-9a-fA-F]{6}$/)"
+              },
+              "wing": {
+                ".validate": "newData.isBoolean()"
+              },
+              "$other": {
+                ".validate": "false"
+              }
+            },
+            "trackId": {
+              ".validate": "newData.val() == $t"
+            },
+            "v": {
+              ".validate": "newData.isNumber()"
+            },
+            "$other": {
+              ".validate": "false"
+            }
+          }
+        }
+      }
+    }
+  }
+}

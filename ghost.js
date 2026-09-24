@@ -72,11 +72,30 @@ function ghostTrack(ghostData) {
   };
 }
 
+function nameTag(THREE, name) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 128;
+  const g = c.getContext('2d');
+  g.font = '800 64px system-ui, sans-serif';
+  const w = Math.min(496, g.measureText(name).width + 56);
+  g.fillStyle = 'rgba(8,12,30,0.72)';
+  g.beginPath(); (g.roundRect || g.rect).call(g, 256 - w / 2, 16, w, 96, 48); g.fill();   // roundRect: 2023+ browsers
+  g.fillStyle = '#e6ecff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(name, 256, 66, 440);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  s.scale.set(6, 1.5, 1);
+  s.position.y = 3;
+  return s;
+}
+
 export async function createGhostPlayer(race, ghostData) {
   const track = ghostTrack(ghostData);
   const mesh = await buildCarMesh(ghostData.carId, ghostData.look || {}, { ghost: true });
   mesh.traverse(o => { o.castShadow = false; });
   mesh.visible = track.frames.length > 0;
+  if (ghostData.name) mesh.add(nameTag(race.THREE, ghostData.name));   // ranking ghost (lb.js): whose run it is
   race.scene.add(mesh);
   const wheels = mesh.userData.wheels || [];
   let last = null;
