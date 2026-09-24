@@ -365,7 +365,7 @@ function buildTrack(def) {
   return {
     curve, length, samples, N, spacing, nearest, bounds, def,
     width: def.width, laps: def.laps || 3, grip: def.grip || 1,
-    wall: def.width / 2 + 9.4,   // physical barrier (lateral m)
+    wall: def.width / 2 + (def.wallGap ?? 9.4),   // physical barrier (lateral m); street circuits set a tight wallGap
     pointAt: t => curve.getPointAt(wrap01(t)),
     tangentAt: t => curve.getTangentAt(wrap01(t)).normalize(),
   };
