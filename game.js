@@ -6,6 +6,7 @@ import { buildCarMesh } from './carmodel.js';
 import { buildWorld } from './world.js';
 import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities } from './abilities.js';
 import { createRecorder, createGhostPlayer } from './ghost.js';
+import { netSample, ageOf, predict, newOffset, applyOffset, retarget, decay } from './netpredict.js';
 
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -114,6 +115,7 @@ async function setup(ctx, root, opts, mode) {
   } else ctx.views = [makeView(ctx, p1, KEYSETS.single, 0, 1)];
   ctx.viewByCar = new Map(ctx.views.map(v => [v.car, v]));
   buildMapBase(ctx);
+  if (race.net) ctx.linkEl = el(ctx.views[0].hud.root, 'div', 'rg-link');
 
   // ---- ghost / recorder
   if (mode === 'ghost' && ctx.ghostData) {
@@ -252,7 +254,7 @@ function makeCar(index, e, mesh) {
       skill: e.control === 'cpu' ? 0.95 + Math.random() * 0.05 : 1,
       t: 0, prevT: null, crossings: 0, halfway: true, lapStart: 0, lastLap: null, pitch: 0, acc: 0, rollS: 0,
       spinVis: 0, spinTot: 0, lastSpin: 0, spinSteer: 0, spinSteerT: 0,
-      lane: 0, laneTarget: 0, laneT: 0, stuck: 0, abilDelay: null, wrong: 0, buf: [], left: false,
+      lane: 0, laneTarget: 0, laneT: 0, stuck: 0, abilDelay: null, wrong: 0, net: null, off: newOffset(), left: false,
     },
   };
 }
@@ -645,6 +647,21 @@ function updateHud(ctx, v) {
   }
   drawMap(ctx, v);
   updateLabels(ctx, v);
+  if (ctx.linkEl && v === ctx.views[0] && ctx.clock - (ctx.linkAt ?? -9) > 0.5) { ctx.linkAt = ctx.clock; updateLink(ctx); }
+}
+
+// online: per opponent '直結 45ms' (WebRTC data channel) or '中継 180ms' (MQTT broker relay)
+function updateLink(ctx) {
+  const race = ctx.race;
+  let info = null;
+  try { info = race.net.linkInfo?.() || null; } catch { /* older session: MQTT only */ }
+  const rows = race.cars.filter(c => c.control === 'net' && !c._.left).map(car => {
+    const li = info?.[car.pid] || { p2p: false, lat: car._.net?.lat };
+    const lat = Number.isFinite(li.lat) ? Math.round(li.lat) : null;
+    const col = lat != null && lat > 250 ? '#ff7676' : li.p2p ? '#5dffb0' : '#ffd23f';
+    return `<div><i style="background:${esc(car.look.body)}"></i>${esc(car.name)} <b style="color:${col}">${li.p2p ? '直結' : '中継'}${lat != null ? ` ${lat}ms` : ''}</b></div>`;
+  });
+  setHtml(ctx.linkEl, rows.join(''));
 }
 
 const _proj = new THREE.Vector3();
@@ -894,7 +911,7 @@ const NET_STALE = 1;   // s without 'state': the peer is loading, hidden or gone
 
 function collide(ctx) {
   const cars = ctx.race.cars, now = performance.now() / 1000;
-  const solid = c => !c._.left && !c.mods.noCollide && (c.control !== 'net' || now - (c._.buf.at(-1)?.t ?? -Infinity) < NET_STALE);
+  const solid = c => !c._.left && !c.mods.noCollide && (c.control !== 'net' || now - (c._.net?.t ?? -Infinity) < NET_STALE);
   for (let i = 0; i < cars.length; i++) for (let j = i + 1; j < cars.length; j++) {
     const a = cars[i], b = cars[j];
     if ((a.control === 'net' && b.control === 'net') || !solid(a) || !solid(b)) continue;
@@ -1061,9 +1078,12 @@ function hookNet(ctx) {
   on('state', msg => {
     const car = byPid.get(String(msg.pid));
     if (!car || car.control !== 'net' || car._.left) return;
-    const b = car._.buf;
-    b.push({ t: performance.now() / 1000, x: +msg.x || 0, y: +msg.y || 0, z: +msg.z || 0, h: +msg.h || 0, s: +msg.s || 0 });
-    if (b.length > 40) b.shift();
+    const c = car._, now = performance.now() / 1000, prev = c.net;
+    const next = netSample(msg, prev, now);
+    // pose on screen right now (the grid slot before the first state), kept continuous across the new prediction
+    const shown = prev ? applyOffset(predict(prev, ageOf(prev, now)), c.off) : [car.pos.x, car.pos.z, car.heading];
+    retarget(c.off, shown, predict(next, ageOf(next, now)));
+    c.net = next;
     if (Number.isFinite(msg.lap)) car.lap = msg.lap;
     if (Number.isFinite(msg.p)) car.progress = msg.p;
     if (Number.isFinite(msg.ft) && !car.finished) { car.finished = true; car.finishTime = msg.ft; }
@@ -1103,24 +1123,18 @@ function hookNet(ctx) {
   });
 }
 
-function netInterp(car, nowS) {
-  const b = car._.buf;
-  if (!b.length) return;
-  const rt = nowS - 0.15;   // relay via MQTT broker: ~100 ms one way plus jitter
-  let a = b[0], nx = null;
-  for (let i = b.length - 1; i >= 0; i--) if (b[i].t <= rt) { a = b[i]; nx = b[i + 1] || null; break; }
-  let x, y, z, h, s;
-  if (nx) {
-    const k = clamp((rt - a.t) / Math.max(1e-3, nx.t - a.t), 0, 1);
-    x = lerp(a.x, nx.x, k); y = lerp(a.y, nx.y, k); z = lerp(a.z, nx.z, k); h = a.h + wrapAngle(nx.h - a.h) * k; s = lerp(a.s, nx.s, k);
-  } else {
-    const ex = clamp(rt - a.t, 0, 0.25);
-    x = a.x + Math.sin(a.h) * a.s * ex; y = a.y; z = a.z + Math.cos(a.h) * a.s * ex; h = a.h; s = a.s;
-  }
-  car.pos.set(x, y, z);
+// Remote car shown where it is now (dead reckoning over the link latency, see netpredict.js), not ~0.3 s in the past.
+function netPredict(ctx, car, nowS, dt) {
+  const c = car._, n = c.net;
+  if (!n) return;   // no state yet: stays on its grid slot
+  decay(c.off, dt);
+  const age = ageOf(n, nowS), [x, z, h] = applyOffset(predict(n, age), c.off);
+  car.pos.x = x; car.pos.z = z;
   car.heading = h;
-  car.speed = s;
-  car.vel.set(Math.sin(h) * s, 0, Math.cos(h) * s);
+  car.speed = n.s;
+  c.yaw = n.w;   // body roll
+  car.vel.set(Math.sin(h) * n.s, 0, Math.cos(h) * n.s);
+  if (Number.isFinite(n.p)) car.progress = n.p + Math.max(0, n.s) * age / ctx.race.track.length;
 }
 
 // ======================================================================================
@@ -1220,10 +1234,16 @@ function update(ctx, dt) {
   const nowS = performance.now() / 1000;
   for (const car of cars) {
     if (car.control !== 'net' || car._.left) continue;
-    netInterp(car, nowS);
-    const n = race.track.nearest(car.pos, car.trackIndex);
+    netPredict(ctx, car, nowS, dt);
+    const tr = race.track, n = tr.nearest(car.pos, car.trackIndex);
     car.trackIndex = n.index;
-    car.offroad = n.dist > race.track.width / 2;
+    if (n.dist > tr.wall) {   // a prediction can overshoot a corner: keep it inside the barriers
+      const s = tr.samples[n.index], push = n.lateral - Math.sign(n.lateral) * tr.wall;
+      car.pos.x -= s.right.x * push; car.pos.z -= s.right.z * push;
+      n.dist = tr.wall;
+    }
+    car.offroad = n.dist > tr.width / 2;
+    if (car._.net) car.pos.y = n.point.y - 0.2 * smooth(tr.width / 2 + 0.5, tr.width / 2 + 3, n.dist);   // same as stepCar
     car._.pitch = Math.asin(clamp(n.tangent.y, -1, 1)) * Math.cos(car.heading - Math.atan2(n.tangent.x, n.tangent.z));
   }
 
@@ -1255,7 +1275,7 @@ function update(ctx, dt) {
       // ft: the public broker has been seen to ack and then drop a single QoS1 'finish', so the finish time also rides
       // on every state message, and 'finish' itself is repeated until results arrive
       const ft = p1.finished ? { ft: r3(p1.finishTime) } : null;
-      try { race.net.send({ t: 'state', pid: race.localPid, x: r2(p1.pos.x), y: r2(p1.pos.y), z: r2(p1.pos.z), h: r3(p1.heading), s: r2(p1.speed), lap: p1.lap, p: r3(p1.progress), ...ft }); }
+      try { race.net.send({ t: 'state', pid: race.localPid, x: r2(p1.pos.x), y: r2(p1.pos.y), z: r2(p1.pos.z), h: r3(p1.heading), s: r2(p1.speed), lap: p1.lap, p: r3(p1.progress), rt: r3(race.time), ...ft }); }
       catch (e) { if (ctx.errors++ < 3) console.warn(e); }
       if (ft && !ctx.finalized && ctx.clock - (ctx.finishSentAt ?? 0) > 2) {
         ctx.finishSentAt = ctx.clock;
@@ -1461,6 +1481,10 @@ const CSS = `
 .rg-abil.sealed .rg-ready{color:#c79bff}
 @keyframes rgpulse{from{filter:brightness(1)}to{filter:brightness(1.6)}}
 .rg-map{position:absolute;right:16px;bottom:16px;width:176px;height:176px;transform:scale(var(--z));transform-origin:100% 100%;border-radius:16px;background:rgba(10,14,24,.5);border:1px solid rgba(255,255,255,.18);backdrop-filter:blur(4px)}
+.rg-link{position:absolute;right:16px;bottom:calc(22px + 176px * var(--z));transform:scale(var(--z));transform-origin:100% 100%;text-align:right;font:700 12px/1.5 system-ui,sans-serif;font-variant-numeric:tabular-nums}
+.rg-link div{white-space:nowrap}
+.rg-link i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;border:1px solid #111}
+.rg-link b{margin-left:4px;padding:0 6px;border-radius:6px;background:rgba(10,14,24,.6)}
 .rg-hint{position:absolute;left:50%;bottom:4px;transform:translateX(-50%);font-size:12px;opacity:.75;background:rgba(0,0,0,.4);padding:3px 12px;border-radius:999px;transition:opacity 1s;z-index:4;white-space:nowrap}
 .rg-hint.off{opacity:0}
 .rg-quit{position:absolute;left:50%;top:10px;transform:translateX(-50%);z-index:5;width:36px;height:36px;padding:0;border-radius:50%;border:1px solid rgba(255,255,255,.3);background:rgba(0,0,0,.4);color:#fff;font:700 16px system-ui,sans-serif;cursor:pointer;opacity:.7}

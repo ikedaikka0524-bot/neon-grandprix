@@ -7,7 +7,7 @@ Libraries (only these):
 - three@0.169.0 via importmap in index.html:
   `"three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js"`,
   `"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"`
-- mqtt.js 5.10.1 via `<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>` → global `mqtt`. (PeerJS/WebRTC was dropped: no working free TURN relay, joins timed out across phone/strict NATs. Do NOT reintroduce it.)
+- mqtt.js 5.10.1 via `<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>` → global `mqtt`. (PeerJS/WebRTC as the transport was dropped: no working free TURN relay, joins timed out across phone/strict NATs. MQTT stays the always-available transport and control plane. Native WebRTC is used only as a best-effort shortcut for `state` messages — `p2p.js`, STUN only, no TURN, no library; see net.js (v3).)
 
 Existing, DO NOT rewrite (read them first): `data.js` (cars, abilities, passives, skill tree, gacha, economy, track, `computeStats`, `nodeCost`, `nodeBlockReason`), `save.js` (`getSave`, `persist`, `newCarRec`, `resetSave`, `loadGhost`, `saveGhost`).
 
@@ -22,6 +22,8 @@ Existing, DO NOT rewrite (read them first): `data.js` (cars, abilities, passives
 | abilities.js | ABIL | `initAbility`, `updateAbilities`, `tryActivate`, `applyRemoteAbility`, `clearAbilities` |
 | ghost.js | ABIL | `createRecorder`, `createGhostPlayer` |
 | net.js | NET | `hostRoom`, `joinRoom` |
+| p2p.js | NET | `createP2P` |
+| netpredict.js | GAME | `netSample`, `ageOf`, `predict`, `newOffset`, `applyOffset`, `retarget`, `decay` |
 
 ## Coordinate conventions
 - Y up. Meters. Car local forward = +Z. `heading` (radians, yaw): forward vector = `(sin h, 0, cos h)`; `mesh.rotation.y = heading`.
@@ -106,7 +108,7 @@ Car = {
 ```
 Per frame order in game: input → reset mods → `updateAbilities(race, dt)` → if `car.input.ability` and car is local/cpu → `tryActivate(race, car)` → physics/collisions (skip car-car collisions if either `noCollide`; `invulnerable` car loses no speed on collision) → track progress/laps → ghost recorder sample → net send → render.
 CPU cars: follow the spline with look-ahead; use ability when gauge full (after a random 0–4 s delay).
-Remote ('net') cars: no local physics; position/heading interpolated from net state (~100 ms buffer).
+Remote ('net') cars: no local physics; shown where they are NOW: the last state is dead-reckoned (speed + yaw rate, arc) forward by its one-way latency `lat` + time since it arrived (capped at 1 s), and jumps between predictions are blended out by a critically damped offset (snap if > 15 m or > 90°). Math in `netpredict.js` (node test: `tools/check-netpredict.mjs`).
 Physics feel: arcade. Offroad (|lateral| > width/2): speed cap ×0.55 (×0.775 with passive 'offroad'), unless `noOffroadPenalty`. Passive 'launch': accel +30% for 3 s after GO. Slipstream (stats.slipstream or passive 'draft'): within 25 m directly behind another car → +8% top (+16% with 'draft'). Drift: handbrake-free — sharp steer at speed with low grip breaks traction; `car.drifting` true while lateral slip is high.
 Race length `TRACK.laps` (3). Countdown 3-2-1-GO. Lap counts only if car passed the half-way sample since last crossing. Results screen overlay is UI's job: game just calls onFinish once all local players finished (and for solo: others get estimated times from their current progress/pace; online: host decides placements, see net).
 
@@ -151,7 +153,7 @@ NetSession = {
 }
 ```
 Events (`type`): `'roster'` (roster array), `'start'` ({ t:'start', roster }), `'state'`, `'ability'`, `'finish'`, `'results'`, `'leave'` ({pid}), `'closed'` (host gone / connection lost).
-Messages game sends: `{t:'state', pid, x,y,z,h, s /*speed*/, lap, p /*progress*/}` ~20 Hz; `{t:'ability', ...}`; `{t:'finish', pid, time}`.
+Messages game sends: `{t:'state', pid, x,y,z,h, s /*speed*/, lap, p /*progress*/, rt /*sender race time*/, ft? /*finish time*/}` ~20 Hz; `{t:'ability', ...}`; `{t:'finish', pid, time}`.
 Host-only: `session.startGame()` → broadcasts `{t:'start', roster}` (also delivered locally). Host collects `finish` messages; when all players finished or 30 s after the first finisher, broadcasts `{t:'results', placements:[{pid, time|null}]}` (sorted). Game (on every peer) builds result.placements from that. If a pid leaves mid-race, treat as DNF.
 Messages include `pid` of the original sender; session never delivers a peer's own message back to it.
 
@@ -231,6 +233,13 @@ Themes: **city** night — skyline of lit-window towers (canvas window textures,
 
 ## net.js (v2)
 - Host: `session.setTrack(id)` (ignored unless id in TRACK_BY_ID) → stores `session.trackId` and re-broadcasts roster. Roster message becomes `{ t:'roster', roster, trackId }`; `start` becomes `{ t:'start', roster, trackId }`. Guests keep `session.trackId` updated before emitting. The emitted 'roster' payload stays the roster array.
+
+## net.js (v3) — low-latency state
+- `p2p.js`: `createP2P({ selfPid, sendSignal(toPid, data), iceServers? })` → `{ connect(pid), handleSignal(fromPid, data), send(pid, obj) -> bool, isOpen(pid), rtt(pid) -> ms|null, onMessage(fn(fromPid, obj)), onOpen(fn), onClose(fn), close(pid?) }`. Native RTCPeerConnection, one negotiated unordered DataChannel (`maxRetransmits: 0`), JSON. STUN only. The smaller pid offers. Gives up quietly after 8 s, retries once 20 s later. Ping/pong every 1 s; `isOpen`/`send` report false 2.5 s after the last pong (one lost ping/pong is tolerated) (send still uses the channel). Never throws.
+- Signalling over MQTT `${base}/s/<pid>` ({from, data}, QoS 1, not roster-filtered); broker RTT echo on `${base}/e/<pid>` every 2 s (QoS 0).
+- `state` gets `q` (per-sender sequence) and `br` (sender's smoothed broker RTT). Sent on every open data channel; also published on MQTT (emqx thinning unchanged) while any roster peer has no live channel. Receivers drop `q <= last q` from that sender and set `lat` (ms, one way): P2P → rtt/2; MQTT → (sender br + own br) / 2, fallback 150. Only `state` travels over P2P (sender = the channel's pid); roster/start/ready/go/finish/results/ability stay on MQTT.
+- Game traffic (`state`/`ability`/`finish`) carries the sender's current start `rid`; receivers drop it when both sides have a rid and they differ (a peer still on the last race's results screen keeps sending until its own 'start' arrives).
+- `session.linkInfo()` → `{ [pid]: { p2p: bool, lat: ms } }` for the HUD (online: '直結 45ms' / '中継 180ms' above the minimap).
 
 ## ui.js / index.html (v2)
 - Course picker (cards: SVG minimap from the course points, name, desc, theme colour, ★ difficulty, length, laps, the selected car's best lap/race on that course) in the solo / ghost / split setup screens and in the online lobby (host picks; guests see the host's choice live, read-only). Remembers `save.lastTrack`.
