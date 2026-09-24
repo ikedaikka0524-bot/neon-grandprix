@@ -7,7 +7,7 @@ Libraries (only these):
 - three@0.169.0 via importmap in index.html:
   `"three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js"`,
   `"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"`
-- PeerJS 1.5.4 via `<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>` → global `Peer`.
+- mqtt.js 5.10.1 via `<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>` → global `mqtt`. (PeerJS/WebRTC was dropped: no working free TURN relay, joins timed out across phone/strict NATs. Do NOT reintroduce it.)
 
 Existing, DO NOT rewrite (read them first): `data.js` (cars, abilities, passives, skill tree, gacha, economy, track, `computeStats`, `nodeCost`, `nodeBlockReason`), `save.js` (`getSave`, `persist`, `newCarRec`, `resetSave`, `loadGhost`, `saveGhost`).
 
@@ -15,7 +15,7 @@ Existing, DO NOT rewrite (read them first): `data.js` (cars, abilities, passives
 
 | File | Owner | Exports |
 |---|---|---|
-| index.html | UI | — (importmap, PeerJS script tag, `<div id="menu">`, `<div id="game">`, CSS, `<script type="module" src="ui.js">`) |
+| index.html | UI | — (importmap, mqtt.js script tag, `<div id="menu">`, `<div id="game">`, CSS, `<script type="module" src="ui.js">`) |
 | ui.js | UI | — (entry point) |
 | carmodel.js | GAME | `buildCarMesh`, `preloadCarModels` |
 | game.js | GAME | `startRace`, `stopRace` |
@@ -137,7 +137,7 @@ export async function createGhostPlayer(race, ghostData) -> {
 ```
 
 ## net.js
-Star topology over PeerJS: host's peer id = `crg26-` + CODE (5 chars, A–Z/2–9, shown to user). Host relays every client message to all other clients (and delivers to itself).
+Transport = public MQTT broker (see net.js header; tested working on GitHub Pages). Room code first char selects the broker. Host is authoritative for roster/start/results; game traffic (state/ability/finish) goes to a shared topic.
 ```js
 export async function hostRoom(name) -> NetSession
 export async function joinRoom(code, name, me? /* { carId, look }, sent with hello */) -> NetSession   // rejects with Japanese message on failure/timeout (10 s)
@@ -163,3 +163,79 @@ Screens (hash-less, show/hide divs): Home (coins, tickets, selected car 3D previ
 - On result: overlay with placements, times, rewards; apply ECONOMY (placeCoins[place-1], winTickets if 1st, firstClearTickets if stats.races was 0, bestLapBonus if new bestLap on this car, beatGhostBonus); update rec.bestLap/bestRace; save ghostRecording via saveGhost if it's faster than existing ghost (or none). persist(). Buttons: もう一度 / メニューへ.
 - Stylish dark neon look, responsive, keyboard hint panel.
 - Use `preloadCarModels(CARS.map(c=>c.id))` at boot (don't block UI).
+
+---------------------------------------------------------------------------------------------------
+# COURSES UPDATE (v2) — supersedes anything above about the single TRACK
+
+`tracks.js` (exists, DO NOT change the point data; tools/check-tracks.mjs validates it): `TRACKS`, `TRACK_BY_ID`, `DEFAULT_TRACK`.
+Each def: `{ id, name, desc, theme: 'forest'|'city'|'desert'|'snow'|'beach', time: 'day'|'night'|'sunset', difficulty 1..3, width, laps, grip, points }`.
+Nobody may use `TRACK` from data.js any more (integration removes it). Everything is per-course.
+
+## Files / owners (v2)
+| File | Owner | Notes |
+|---|---|---|
+| game.js | CORE | per-course plumbing; world building moved out to world.js |
+| world.js (new) | CORE | `buildWorld(ctx, def)` common parts + dispatch to a theme; also contains the **forest** theme (the current scenery, moved) |
+| theme-city.js / theme-desert.js / theme-snow.js / theme-beach.js (new) | one THEME agent each | `export default { env, build }` (below) |
+| ghost.js | CORE | ghostData gains `trackId` |
+| ui.js, index.html, save.js, net.js | UI | course select, per-course records & ghosts, online course choice |
+| carmodel.js, data.js (modelRot values only) | CARS | Meshy GLB orientation + tint QA |
+
+## game.js (v2)
+- `startRace(opts)`: new `opts.trackId` (default `DEFAULT_TRACK`). `race.def` = the TRACKS entry. `track.width/laps/grip/def` come from it.
+  Barrier lateral = `def.width/2 + 9.4` (was the WALL constant). Laps from `def.laps` (HUD, lap logic, estimates). Every car's effective grip ×= `def.grip`.
+- `result.trackId` added. Ghost recorder writes `trackId`.
+- Calls `buildWorld(ctx, def)` from world.js; if it returns `{ update(dt, time) }` call it every frame (theme animation: waves, snowfall...).
+- Night courses (`env.night`): cars get emissive head/tail lights; local player car(s) get one SpotLight headlight (shadow off). Keep total real lights ≤ 8.
+
+## world.js
+`export function buildWorld(ctx, def) -> { update(dt, time) }`. Builds, parameterised by the theme's `env`: sky dome, fog, hemi + sun (shadow camera follows the player as now), terrain (height fn + ground texture + vertex tint), road ribbon, shoulders, curbs, barrier walls (style per env), start/finish line + gantry + grid marks, and the minimap-independent `ctx.groundAt`. Then calls `theme.build(api)`.
+Theme lookup: `{ forest: <inline in world.js>, city, desert, snow, beach }` via static imports of the theme files.
+```js
+api = {
+  THREE, world /* Group to add to */, track, def, env, rnd /* seeded 0..1 */, night,
+  near(x, z) -> [distToCenterline, centerlineY], groundAt(x, z) -> y,
+  canvasTex(w, h, draw(g, w, h), repeat = true) -> CanvasTexture,
+  isFree(x, z, r) -> bool   // true if a circle of radius r at (x,z) is outside barriers (dist >= width/2 + 12 + r) and not overlapping blockers
+  block(x, z, r)            // reserve space (call for every big object you place)
+  placeFacing(obj, sampleIndex, lateral) -> {x, z}   // put obj beside the track, local -Z facing the road
+  onUpdate(fn(dt, time))    // per-frame animation hook
+}
+```
+Theme module shape:
+```js
+export default {
+  env: {
+    sky: { top, horizon, bottom },                 // '#hex'
+    fog: { color, near, far },
+    sun: { dir: [x, y, z], color, intensity }, hemi: { sky, ground, intensity },
+    exposure,                                      // renderer.toneMappingExposure
+    night: bool,
+    terrain: { base: '#hex', paint(g, w, h) /* 256² ground texture painter */, hills /* m */, rim /* m, mountains/dunes at the edge */, rimColor: '#hex' },
+    road: { base: '#hex', line: '#hex', edge: '#hex' }, shoulder: '#hex',
+    barrier: 'ads' | 'guardrail' | 'neon' | 'rock' | 'snowbank' | 'fence',
+    curb: ['#hex', '#hex'],
+  },
+  build(api) {}   // scenery; may call api.onUpdate
+}
+```
+Rules for themes: scenery never on or over the road (use isFree/block); budget ≤ ~150 draw calls and ≤ ~250k triangles for the whole theme (InstancedMesh / mergeGeometries); no external assets (procedural geometry + canvas textures only); nothing may block the chase camera's view along the road (keep tall things ≥ 20 m from the barrier on the inside of corners).
+Themes: **city** night — skyline of lit-window towers (canvas window textures, emissive), neon signs in Japanese/English, streetlights (emissive heads; at most 4 PointLights total), elevated-road pillars where the road is raised, wet-look dark asphalt. **desert** sunset — sand dunes, red mesas/buttes, cacti, rock arches, tumbleweeds rolling (onUpdate), heat-haze-ish warm fog. **snow** day — snowy terrain, snow-covered pines, frozen lake, rocky cliffs, falling snow particles around the camera area (onUpdate, Points), snowbank barriers. **beach** day — animated ocean plane (shader waves, foam line) on the outside of the east side, sand, palm trees, beach huts/umbrellas, lighthouse, sailboats bobbing.
+
+## save.js (v2)
+- Car record: `best: { [trackId]: { lap, race } }` (migrate old `bestLap`/`bestRace` into `best.circuit`, then delete them).
+- `loadGhost(carId, trackId)`, `saveGhost(carId, trackId, ghost|null)`; key `crg.ghost.<carId>.<trackId>`; old key `crg.ghost.<carId>` is read as circuit (migrate on first read).
+- `save.lastTrack` (default DEFAULT_TRACK).
+
+## net.js (v2)
+- Host: `session.setTrack(id)` (ignored unless id in TRACK_BY_ID) → stores `session.trackId` and re-broadcasts roster. Roster message becomes `{ t:'roster', roster, trackId }`; `start` becomes `{ t:'start', roster, trackId }`. Guests keep `session.trackId` updated before emitting. The emitted 'roster' payload stays the roster array.
+
+## ui.js / index.html (v2)
+- Course picker (cards: SVG minimap from the course points, name, desc, theme colour, ★ difficulty, length, laps, the selected car's best lap/race on that course) in the solo / ghost / split setup screens and in the online lobby (host picks; guests see the host's choice live, read-only). Remembers `save.lastTrack`.
+- Pass `trackId` to startRace. Records, rewards and ghosts are per course. Ghost mode needs a ghost for car+course.
+- Coin rewards × (1 + 0.25 × (difficulty − 1)).
+- Home screen shows the course count / a small "5 コース" teaser; replace the single-track info (`#trackMap`, `#trkInfo`).
+
+## carmodel.js (v2, CARS agent)
+- Verify in the browser that every `models/*.glb` car faces +Z (nose forward) with its `modelRot`; fix per-car `modelRot` in data.js if not.
+- Textured GLBs: the Meshy texture already has the right colours. Default look must show the texture untinted; only when the player picks a body colour different from the car's default, tint the largest material in a way that keeps texture detail (e.g. multiply by a lightened colour or hue-shift). Verify visually for 3–4 cars.
