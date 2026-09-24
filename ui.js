@@ -11,6 +11,7 @@ import { buildCarMesh, preloadCarModels } from './carmodel.js';
 import { startRace, stopRace } from './game.js';
 import { hostRoom, joinRoom } from './net.js';
 import { BUILD } from './version.js';
+import { lbReady, lbTop, lbGhost, lbQueue, lbFlush, lbPending, lbNeedsReload, nameAsked, setNameAsked, rarityOf, rankText } from './lb.js';
 
 /* ================= helpers ================= */
 const $ = (s, r = document) => r.querySelector(s);
@@ -339,6 +340,7 @@ const SCREENS = {
   garage: ['#scr-garage', 'ガレージ', renderGarage],
   tree: ['#scr-tree', 'スキルツリー', renderTree],
   settings: ['#scr-settings', '設定', renderSettings],
+  lb: ['#scr-lb', 'ランキング', renderLb],
 };
 let cur = 'home';
 const stack = [];
@@ -423,7 +425,7 @@ function renderHome() {
   $('#homeCar').innerHTML = `${rb(c.rarity)}<span>${esc(c.name)}</span>`;
   $('#homeAbility').innerHTML = abilityHTML(computeStats(id, rec.nodes));
   const g = validGhost(id, curTrack());
-  $('#tileGhost small').textContent = g ? `ゴースト ${fmt(g.time)} に挑戦` : '自分のゴーストに挑戦';
+  $('#tileGhost small').textContent = g ? `ゴースト ${fmt(g.time)} に挑戦` : 'タイムアタック';
   $('#gachaBadge').innerHTML = save.tickets > 0 ? `<i class="ic-ticket"></i>${save.tickets}` : '';
 }
 
@@ -502,15 +504,14 @@ function renderPrep(mode) {
     const b = bestOf(id, tid);
     return `<div class="rec">${mode === 'split' ? `<em class="p${i + 1}">P${i + 1}</em>` : ''}<span>ベストラップ <b>${fmt(b.lap)}</b></span><span>ベストレース <b>${fmt(b.race)}</b></span></div>`;
   }).join('');
-  let ok = true;
   if (mode === 'ghost') {
     const g = validGhost(p1, tid);
-    ok = !!g;
-    $('#ghostBox').innerHTML = g
+    $('#ghostBox').innerHTML = (g
       ? `<div class="gh-ok"><span class="gh-ic"></span><div><b>ゴースト ${fmt(g.time)}</b><small>勝てば +${Math.round(ECONOMY.beatGhostBonus * coinMul(tid))} コイン</small></div></div>`
-      : '<div class="gh-none">まずこの車でこのコースをソロかゴースト戦で1回完走しよう</div>';
+      : '<div class="gh-ok"><div><b>タイムアタック</b><small>ゴーストなし・ひとりで走ってゴーストを作ろう</small></div></div>')
+      + (lbReady() ? '<p class="hint">タイムは世界ランキングに自動で登録されます</p>' : '');
   }
-  $('#btnStart').disabled = !ok;
+  $('#btnStart').disabled = false;
   $('#prepKeys').innerHTML = mode === 'split' ? KEYS_SPLIT : KEYS_SOLO;
 }
 
@@ -522,11 +523,7 @@ function startMode(mode) {
   const trackId = curTrack();
   if (mode === 'solo') return launch({ mode, trackId, players: [player('p1', save.name)], cpuCount }, mode);
   if (mode === 'split') return launch({ mode, trackId, players: [player('p1', save.name), player('p2', 'プレイヤー2')] }, mode);
-  if (mode === 'ghost') {
-    const g = validGhost(save.selected.p1, trackId);
-    if (!g) { sfx.error(); toast('まずこの車でこのコースをソロかゴースト戦で1回完走しよう', 'err'); return; }
-    return launch({ mode, trackId, players: [player('p1', save.name)], ghost: g }, mode);
-  }
+  if (mode === 'ghost') return launch({ mode, trackId, players: [player('p1', save.name)], ghost: validGhost(save.selected.p1, trackId) }, mode);
 }
 
 /* ================= race lifecycle ================= */
@@ -570,9 +567,11 @@ function teardownRace() {
 }
 function endRace() {
   const back = race?.screen || 'home';
+  if (!$('#rLb').hidden) { if ($('#rName').value.trim()) setName($('#rName').value); $('#rLb').hidden = true; }   // name prompt left via another button
   teardownRace();
   show(back, false);
   checkUpdate(false);   // the 5-min poll skips race / results time, so back-to-back races would never look
+  lbSend();             // a record held back by the name prompt goes out now
 }
 // Quit from the race (Esc → 終了する) or a failed start. Online that means leaving the room ('オンライン対戦から退出します'),
 // so the others get 'leave' (car removed, results not held up) and a quitting host can't restart over live races.
@@ -588,6 +587,7 @@ function onFinish(res) {
   try { rewards = applyRewards(res); } catch (e) { console.error('reward error', e); }
   refreshWallet();
   showResults(res, rewards);
+  if (res.mode === 'ghost') lbRun(res).catch(e => console.warn('lb', e));
 }
 
 // Records, ghosts and the coin multiplier are per course (the one the UI launched).
@@ -595,15 +595,17 @@ const raceTrack = () => (TRACK_BY_ID[race?.opts.trackId] ? race.opts.trackId : D
 function applyRewards(res) {
   const out = [], locals = res.locals || [], multi = locals.length > 1, tid = raceTrack(), mul = coinMul(tid);
   const firstClear = save.stats.races === 0, coins = n => Math.round(n * mul);
+  // time attack alone or against a ranking ghost: no win prize (a slow ranking ghost could be farmed)
+  const alone = res.mode === 'ghost' && (!race?.opts.ghost || race.opts.ghost.lb);
   let finished = false, won = false;
   if (mul > 1 && locals.some(L => L.time != null)) out.push({ label: `コース難易度 ${'★'.repeat(TRACK_BY_ID[tid].difficulty)} コイン×${mul}` });
   for (const L of locals) {
     const tag = multi ? `${String(L.control).toUpperCase()} ` : '';
     if (L.time == null) { out.push({ label: `${tag}リタイア` }); continue; }
     finished = true;
-    const pc = coins(ECONOMY.placeCoins[L.place - 1] || 0);
-    if (pc) { save.coins += pc; out.push({ label: `${tag}${L.place}位 賞金`, coins: pc }); }
-    if (L.place === 1) { won = true; save.tickets += ECONOMY.winTickets; out.push({ label: `${tag}1位ボーナス`, tickets: ECONOMY.winTickets }); }
+    const place = alone ? 2 : L.place, pc = coins(ECONOMY.placeCoins[place - 1] || 0);
+    if (pc) { save.coins += pc; out.push({ label: `${tag}${alone ? 'タイムアタック完走' : `${place}位 賞金`}`, coins: pc }); }
+    if (place === 1) { won = true; save.tickets += ECONOMY.winTickets; out.push({ label: `${tag}1位ボーナス`, tickets: ECONOMY.winTickets }); }
     const rec = save.cars[L.carId];
     if (!rec) continue;
     const b = (rec.best ||= {})[tid] ||= { lap: null, race: null };
@@ -614,7 +616,7 @@ function applyRewards(res) {
     }
     if (b.race == null || L.time < b.race) { b.race = L.time; out.push({ label: `${tag}自己ベスト更新 ${fmt(L.time)}`, hot: true }); }
   }
-  if (res.beatGhost) { save.coins += coins(ECONOMY.beatGhostBonus); out.push({ label: 'ゴースト撃破', coins: coins(ECONOMY.beatGhostBonus), hot: true }); }
+  if (res.beatGhost && !alone) { save.coins += coins(ECONOMY.beatGhostBonus); out.push({ label: 'ゴースト撃破', coins: coins(ECONOMY.beatGhostBonus), hot: true }); }
   if (finished) {
     if (firstClear) { save.tickets += ECONOMY.firstClearTickets; out.push({ label: '初完走ボーナス', tickets: ECONOMY.firstClearTickets, hot: true }); }
     save.stats.races++;
@@ -653,7 +655,7 @@ function showResults(res, rewards) {
   }).join('');
 
   const rows = (res.placements || []).map(p => ({ ...p }));
-  if (ghost) { rows.push({ name: 'ゴースト', carId: ghost.carId, time: ghost.time, gh: true }); rows.sort((a, b) => (a.time ?? Infinity) - (b.time ?? Infinity)); }
+  if (ghost) { rows.push({ name: ghost.name || 'ゴースト', carId: ghost.carId, time: ghost.time, gh: true }); rows.sort((a, b) => (a.time ?? Infinity) - (b.time ?? Infinity)); }
   $('#rTable').innerHTML = rows.map((p, i) => {
     const c = CAR_BY_ID[p.carId];
     return `<li class="${p.isLocal ? 'me' : ''} ${p.gh ? 'gh' : ''}" style="--i:${i};--rc:${c ? RARITY[c.rarity].color : '#888'}"><span class="pos">${i + 1}</span><span class="nm">${esc(p.name)}</span><span class="cr">${c ? esc(c.name) : ''}</span><span class="tm">${p.time == null ? 'DNF' : fmt(p.time)}</span></li>`;
@@ -668,6 +670,8 @@ function showResults(res, rewards) {
   const online = res.mode === 'online';
   $('#rAgain').textContent = online ? 'ロビーへ' : 'もう一度';
   $('#rMenu').textContent = online ? '退出してメニューへ' : 'メニューへ';
+  $('#rLbBtn').hidden = res.mode !== 'ghost';
+  $('#rLb').hidden = true;
   $('#rConfetti').innerHTML = win ? confetti() : '';
   if (win) sfx.fanfare();
   $('#results').classList.remove('hidden');
@@ -1115,6 +1119,78 @@ function setName(v) {
   return save.name;
 }
 
+/* ================= leaderboard (lb.js) ================= */
+// Time attacks (ghost mode: no CPUs / other players) go to the online ranking per course, overall and per rarity.
+const LB = { metric: 'race', bucket: 'all', tok: 0, rows: [], me: null };
+const ymd = t => { const d = new Date(t); return t ? `${d.getFullYear() === new Date().getFullYear() ? '' : d.getFullYear() + '/'}${d.getMonth() + 1}/${d.getDate()}` : ''; };
+function lbRow(e, me) {
+  const m = LB.metric, id = m === 'race' ? e.raceCar : e.lapCar, r = rarityOf(id), go = m === 'race';
+  return `<li class="${me ? 'me' : ''}${go ? ' go' : ''}" data-uid="${esc(e.uid)}"${go ? ' tabindex="0"' : ''} style="--rc:${r ? RARITY[r].color : '#888'}">`
+    + `<span class="pos">${rankText(e.rank)}</span><span class="nm">${esc(e.name)}</span>`
+    + `<span class="cr">${r || ''} ${esc(CAR_BY_ID[id]?.name || id)} ・ ${ymd(m === 'race' ? e.raceAt : e.lapAt)}</span><span class="tm">${fmt(e[m])}</span></li>`;
+}
+function renderLb() {
+  mount(null);
+  const tid = curTrack(), list = $('#lbList'), tok = ++LB.tok;
+  renderCourses($('#lbCourses'), tid);
+  $$('#lbMetric button').forEach(b => b.classList.toggle('on', b.dataset.m === LB.metric));
+  $$('#lbBucket button').forEach(b => b.classList.toggle('on', b.dataset.b === LB.bucket));
+  $('#lbHint').textContent = LB.metric === 'race' && lbReady() ? 'タップでそのゴーストと対戦（いま選んでいる車で）' : '';
+  const msg = (t, x = '') => { list.innerHTML = `<li class="lb-msg">${t}</li>${x}`; };
+  if (!lbReady()) return msg('オンラインランキングは準備中です');
+  msg('読み込み中…');
+  lbTop(tid, LB.bucket, LB.metric).then(({ rows, me }) => {
+    if (tok !== LB.tok) return;
+    Object.assign(LB, { rows, me });
+    if (!rows.length) return msg('まだ記録がありません。タイムアタックで一番乗りしよう！');
+    list.innerHTML = rows.map(e => lbRow(e, e === me)).join('') + (me && !rows.includes(me) ? `<li class="lb-msg">…</li>${lbRow(me, true)}` : '');
+  }, e => {
+    console.warn('lb', e);
+    if (tok === LB.tok) msg(lbNeedsReload() ? '接続できませんでした。ページを再読み込みしてください' : 'ランキングを読み込めませんでした', '<li class="lb-msg"><button class="btn sm" id="lbRetry">再読み込み</button></li>');
+  });
+}
+async function lbRace(uid) {
+  const tid = curTrack(), e = [...LB.rows, LB.me].find(x => x?.uid === uid), c = CAR_BY_ID[save.selected.p1];
+  if (LB.metric !== 'race' || !e) return;
+  if (!await ask({ title: 'ゴーストと対戦', html: `<p>${esc(e.name)} のゴースト（<b>${fmt(e.race)}</b>）とタイムアタック。</p><p>使う車：${rb(c.rarity)} ${esc(c.name)}</p>`, yes: '対戦する' })) return;
+  toast('ゴーストを読み込み中…');
+  try {
+    const ghost = await lbGhost(tid, LB.bucket, e);
+    if (cur === 'lb' && tid === curTrack()) launch({ mode: 'ghost', trackId: tid, players: [player('p1', save.name)], ghost }, 'lb');
+  } catch (err) { console.warn('lb ghost', err); sfx.error(); toast('ゴーストを読み込めませんでした', 'err'); }
+}
+// finished time attack → queue (sent now, or after the one-time name prompt / when back online)
+async function lbRun(res) {
+  const L = res.locals?.[0], g = res.ghostRecording;
+  if (!lbReady() || L?.time == null || !g) return;
+  await lbQueue({ trackId: raceTrack(), carId: L.carId, race: g.time, lap: L.bestLap, ghost: g });
+  if (save.name === 'Player' && !nameAsked() && race?.done) {
+    setNameAsked();
+    $('#rName').value = '';
+    $('#rLb').hidden = false;
+    return;
+  }
+  lbSend();
+}
+function lbSend() {
+  if (lbPending() && $('#rLb').hidden) lbFlush().then(m => { if (m) { toast(m); sfx.fanfare(); } }, e => console.warn('lb: kept for later', e));
+}
+$('#lbCourses').onclick = e => { const c = e.target.closest('[data-track]'); if (c) pickTrack(c.dataset.track); };
+$('#lbMetric').onclick = e => { const b = e.target.closest('button'); if (b) { LB.metric = b.dataset.m; renderLb(); } };
+$('#lbBucket').onclick = e => { const b = e.target.closest('button'); if (b) { LB.bucket = b.dataset.b; renderLb(); } };
+$('#lbBucket').innerHTML = ['all', ...RARITY_ORDER].map(b => `<button data-b="${b}"${b === 'all' ? '' : ` style="color:${RARITY[b].color}"`}>${b === 'all' ? 'ALL' : b}</button>`).join('');
+$('#lbList').onclick = e => {
+  if (e.target.closest('#lbRetry')) return lbNeedsReload() ? location.reload() : renderLb();
+  const li = e.target.closest('li[data-uid]');
+  if (li) lbRace(li.dataset.uid);
+};
+$('#lbList').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.closest?.('li[data-uid]')?.click(); });
+$('#rLbBtn').onclick = () => { endRace(); show('lb'); };
+$('#rNameOk').onclick = () => { setName($('#rName').value); $('#rLb').hidden = true; lbSend(); };
+$('#rName').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) $('#rNameOk').click(); });   // not the Enter that confirms an IME conversion
+addEventListener('online', lbSend);
+setTimeout(lbSend, 4000);   // runs queued while offline
+
 /* ================= event wiring ================= */
 document.addEventListener('click', e => {
   const t = e.target.closest('button');
@@ -1246,9 +1322,10 @@ addEventListener('storage', e => {
 
 // results
 $('#rAgain').onclick = () => {
-  const mode = race?.opts.mode;
+  const o = race?.opts, mode = o?.mode;
   endRace();
-  if (mode && mode !== 'online') startMode(mode);
+  if (o?.ghost?.lb) launch({ ...o, players: [player('p1', save.name)] }, 'lb');   // the same ranking ghost again
+  else if (mode && mode !== 'online') startMode(mode);
 };
 $('#rMenu').onclick = () => {
   const online = race?.opts.mode === 'online';
