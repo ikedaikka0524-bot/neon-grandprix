@@ -5,7 +5,7 @@ import {
   RARITY, RARITY_ORDER, ABILITIES, PASSIVES, CARS, CAR_BY_ID, STARTER_CAR, SKILL_TREE, NODE_BY_ID,
   nodeCost, nodeBlockReason, computeStats, GACHA, ECONOMY, TRACK,
 } from './data.js';
-import { getSave, persist, newCarRec, resetSave, loadGhost, saveGhost } from './save.js';
+import { getSave, persist, newCarRec, resetSave, reloadSave, loadGhost, saveGhost } from './save.js';
 import { buildCarMesh, preloadCarModels } from './carmodel.js';
 import { startRace, stopRace } from './game.js';
 import { hostRoom, joinRoom } from './net.js';
@@ -1138,6 +1138,14 @@ $('#setReset').onclick = async () => {
   renderSettings();
   toast('データをリセットしました');
 };
+// another tab wrote the save: adopt it, or this tab's next persist() overwrites that tab's pulls/unlocks/rewards
+addEventListener('storage', e => {
+  const s = reloadSave(e);
+  if (!s) return;
+  save = s;
+  refreshWallet();
+  if (!race) rerender();
+});
 
 // results
 $('#rAgain').onclick = () => {

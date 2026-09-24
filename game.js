@@ -1164,14 +1164,16 @@ function collide(ctx) {
     }
     if (!best) continue;
     const shieldA = a.mods.invulnerable && !b.mods.invulnerable, shieldB = b.mods.invulnerable && !a.mods.invulnerable;
-    const ia = a.control === 'net' || shieldA ? 0 : 1 / (a.stats.mass || 1);
-    const ib = b.control === 'net' || shieldB ? 0 : 1 / (b.stats.mass || 1);
-    if (ia + ib === 0) continue;
-    const wa = ia / (ia + ib), wb = ib / (ia + ib);
+    const ma = a.control === 'net' ? 0 : 1 / (a.stats.mass || 1), mb = b.control === 'net' ? 0 : 1 / (b.stats.mass || 1);
+    const ia = shieldA ? 0 : ma, ib = shieldB ? 0 : mb;   // impulse: a shielded car loses no speed
+    // Position: a shield shoves the other car aside, but a remote car can't be moved here (its own screen does the
+    // shoving), so vs a net car the shielded local car takes the correction instead of driving through it.
+    const pa = ia + ib ? ia : ma, pb = ia + ib ? ib : mb;   // never both 0: net-vs-net was skipped above
+    const wa = pa / (pa + pb), wb = pb / (pa + pb);
     a.pos.x -= best.nx * best.pen * wa; a.pos.z -= best.nz * best.pen * wa;
     b.pos.x += best.nx * best.pen * wb; b.pos.z += best.nz * best.pen * wb;
     const vrel = (b.vel.x - a.vel.x) * best.nx + (b.vel.z - a.vel.z) * best.nz;
-    if (vrel < 0) {
+    if (vrel < 0 && ia + ib) {
       const jimp = -1.3 * vrel / (ia + ib);
       a.vel.x -= best.nx * jimp * ia; a.vel.z -= best.nz * jimp * ia;
       b.vel.x += best.nx * jimp * ib; b.vel.z += best.nz * jimp * ib;

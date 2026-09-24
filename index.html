@@ -148,8 +148,8 @@ canvas.pv:active{cursor:grabbing}
 .prep-stage .stage{position:absolute;inset:0}
 [data-mode=split] .prep-stage::after{content:"";position:absolute;left:50%;top:8%;bottom:8%;width:2px;background:linear-gradient(transparent,var(--line2),transparent);pointer-events:none}
 #scr-prep:not([data-mode=split]) .only-split,#scr-prep:not([data-mode=solo]) .only-solo,#scr-prep:not([data-mode=ghost]) .only-ghost{display:none!important}
-.pickers{position:absolute;left:0;right:0;bottom:16px;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;justify-items:center;gap:8px;padding:0 10px;pointer-events:none}
-.picker{pointer-events:auto;display:flex;align-items:center;gap:4px;max-width:100%;padding:5px;border-radius:999px;background:rgba(6,9,22,.8);border:1px solid color-mix(in srgb,var(--rc,#667) 60%,transparent);box-shadow:0 0 24px -6px var(--rc,transparent);backdrop-filter:blur(6px)}
+.pickers{position:absolute;left:0;right:0;bottom:16px;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);justify-items:center;gap:8px;padding:0 10px;pointer-events:none}
+.picker{pointer-events:auto;display:flex;align-items:center;gap:4px;min-width:0;max-width:100%;padding:5px;border-radius:999px;background:rgba(6,9,22,.8);border:1px solid color-mix(in srgb,var(--rc,#667) 60%,transparent);box-shadow:0 0 24px -6px var(--rc,transparent);backdrop-filter:blur(6px)}
 .ptag{flex:none;font:900 12px var(--num);padding:4px 8px;border-radius:999px;background:var(--cyan);color:#041018}
 .picker[data-p=p2] .ptag{background:var(--pink)}
 .arrow{flex:none;width:34px;height:34px;border-radius:50%;border:0;background:rgba(255,255,255,.08);font-size:22px;line-height:1;cursor:pointer;padding-bottom:3px;transition:.15s}
