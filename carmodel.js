@@ -914,6 +914,12 @@ const ACCENTS = {
     add(s, box(1.7, 0.05, 0.24), m.body, 0, 1.03, -2.16).rotation.x = 0.22;                                  // ducktail
     add(s, box(1.86, 0.03, 0.22), m.black, 0, 0.27, 2.36);                                                   // splitter
   },
+  ur_fortune(s, m) {   // orange / black two-tone widebody: black roof, arch flares, skirts and ducktail
+    add(s, box(1.3, 0.03, 0.66), m.black, 0, 1.195, -0.5);
+    for (const z of [1.4, -1.35]) pair(s, box(0.1, 0.16, 1.02), m.black, 1.01, 0.68, z);
+    pair(s, box(0.05, 0.12, 1.7), m.black, 0.99, 0.33, 0.02);
+    add(s, box(1.72, 0.05, 0.32), m.black, 0, 0.98, -2.02);
+  },
 };
 
 function procedural(def, look) {

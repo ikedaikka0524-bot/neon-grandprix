@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ABILITIES } from './data.js';
 import { buildRobotMesh } from './carmodel.js';
+import { getDimension, makePortal, ORIGIN } from './tokyo-dimension.js';
 
 const OIL_RADIUS = 3, OIL_BEHIND = 4.2;
 const DRIFT_CHARGE = 1.2;   // extra gauge fill rate while drifting (stats.driftCharge)
@@ -24,6 +25,7 @@ const COLOR = {
   boost: '#5fe3ff', nitro: '#ff9a3c', oil: '#b6ff3b', shield: '#5ef1ff',
   warp: '#6fe0ff', timeslow: '#c77dff', phase: '#ff8fd8', thunderbolt: '#ffe14d',
   magnet: '#ff4d6a', domain: '#b36bff', downforce: '#56c8ff', robotdash: '#ffb347', hellchain: '#ff5a1f',
+  magnet: '#ff4d6a', domain: '#b36bff', downforce: '#56c8ff', robotdash: '#ffb347', tokyodive: '#ff8a3d',
 };
 const pal = (...h) => h.map(x => new THREE.Color(x));
 const PAL = {
@@ -39,6 +41,7 @@ const PAL = {
   downforce: pal('#ffffff', '#bff0ff', '#56c8ff', '#2a7bff'),
   robotdash: pal('#ffffff', '#fff1c9', '#ffb347', '#ff6b1a'),
   hellchain: pal('#fff2b0', '#ffb347', '#ff6a1f', '#ff2a10', '#b3120a'),
+  tokyodive: pal('#ffffff', '#ffc27a', '#ff7a1a', '#ff2f9e', '#19f0e0'),
   oil: pal('#0b0a10', '#17131f', '#2b2438'),
   smoke: pal('#8a8f99', '#6b707a', '#a2a7b0'),
   spark: pal('#fff6b0', '#ffd23f', '#ffffff'),
@@ -57,6 +60,8 @@ const isHuman = c => c.control === 'p1' || c.control === 'p2';
 const isRobot = c => c.ability?.id === 'robotdash' && c.ability.active > 0 && c.ability.t < c.ability.robotDur + ROBOT_T;
 // shield / phase / robot form shrug a hellchain off
 const chainProof = c => isRobot(c) || (c.ability?.active > 0 && (c.ability.id === 'shield' || c.ability.id === 'phase'));
+// tokyodive: off in its own space (a remote diver is just hidden here) - nothing can target or slow it meanwhile
+const away = c => !!c?.ability?.away;
 const flash = (race, text, color) => race.hud?.flash?.(text, color);
 const who = (race, car) => (race.mode === 'split' ? (car.control === 'p1' ? 'P1 ' : 'P2 ') : '');
 const _v = new THREE.Vector3(), _w = new THREE.Vector3();
@@ -308,7 +313,12 @@ function st(race) {
   return S;
 }
 
-const TEX = { clock: clockTex, film: filmTex, beam: beamTex, rune: runeTex, flow: flowTex, blobs: () => [blobTex(), blobTex(), blobTex()] };
+const underTex = () => canvasTex(128, g => {
+  const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(255,255,255,0.9)'); gr.addColorStop(0.45, 'rgba(255,255,255,0.45)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+});
+const TEX = { clock: clockTex, film: filmTex, beam: beamTex, rune: runeTex, flow: flowTex, under: underTex, blobs: () => [blobTex(), blobTex(), blobTex()] };
 function tex(S, key) {
   return (S.tex[key] ||= TEX[key]());
 }
@@ -322,7 +332,8 @@ function addFx(S, obj, life, tick) {
 }
 function dropFx(f) {
   f.obj.removeFromParent();
-  if (!f.obj.userData.keepMat) f.obj.material.dispose();
+  if (f.obj.userData.dispose) f.obj.userData.dispose();
+  else if (!f.obj.userData.keepMat) f.obj.material.dispose();
   if (f.obj.userData.ownGeo) f.obj.geometry.dispose();
 }
 
@@ -770,6 +781,19 @@ function carVisuals(race, S, car, dt) {
   }
 
   if (a.id === 'hellchain' && (a.chained || a.chainFx)) chainVisuals(S, car, a, dt);
+  if (a.id === 'tokyodive' && (act || fx.under)) {   // neon underglow while diving
+    if (!fx.under) {
+      const mat = new THREE.MeshBasicMaterial({ map: tex(S, 'under'), color: '#ff7a1a', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+      fx.under = new THREE.Mesh(S.geo.plane, mat);
+      fx.under.scale.set(fx.size.x * 0.9, 1, fx.size.z * 0.62);
+      fx.under.position.set(fx.center.x, 0.06, fx.center.z);
+      fx.under.renderOrder = 2;
+      fx.group.add(fx.under);
+      fx.mats.push(mat);
+    }
+    fx.under.visible = !!act;
+    if (act) fx.under.material.opacity = 0.7 + 0.3 * Math.sin(t * 9);
+  }
 
   if (car.spin > 0 && Math.random() < dt * 25) {   // dizzy sparkles
     const th = t * 9 + rnd(-0.3, 0.3);
@@ -782,7 +806,7 @@ function carVisuals(race, S, car, dt) {
 function applyOwn(race, car, a) {
   if (a.chained) return chainTow(race, car, a);
   const m = car.mods, tg = a.id === 'magnet' ? a.target : null, gap = tg ? magnetGap(race, car, tg) : 0;
-  if (tg && (tg.finished || tg._?.left || gap <= MAGNET_CATCH)) {
+  if (tg && (tg.finished || tg._?.left || away(tg) || gap <= MAGNET_CATCH)) {
     a.active = 0;   // caught up (or overtook / target gone): the pull ends
     return;
   }
@@ -795,6 +819,7 @@ function applyOwn(race, car, a) {
   else if (a.id === 'thunderbolt') { m.speedMul += THUNDER_BOOST; m.accelMul += THUNDER_BOOST; }   // a.power = victim's spin
   else if (a.id === 'domain') { m.speedMul += DOMAIN_BOOST; m.accelMul += DOMAIN_BOOST; }        // a.power = slow inside the dome
   else if (a.id === 'downforce') m.downforce = a.power;
+  else if (a.id === 'tokyodive' && a.away) { m.noCollide = true; m.noOffroadPenalty = true; }
   else if (a.id === 'robotdash') {
     if (isRobot(car)) m.invulnerable = true;
     else { m.speedMul += a.power; m.accelMul += a.power; }   // changed back: the dash
@@ -806,20 +831,23 @@ function endFx(S, car) {
   if (a.id === 'shield') burst(S.glow, p, 40, PAL.shield, 8, 0.5, 0.45, 0.05);
   else if (a.id === 'phase') { setPhase(car, false); burst(S.glow, p, 30, PAL.phase, 5, 0.6, 0.4, 0.05); }
   else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash', 'hellchain'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
+  else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash', 'tokyodive'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
   else burst(S.smoke, p, 10, PAL.smoke, 2, 0.8, 0.5, 1.4, -0.5, 1.5, 0.25);
 }
 
 // track-relative helpers
-function rideOffset(tr, x, y, z) {
+// pose.i: the car's own track index. nearest() compares x/z only, so without it a pose where the course crosses
+// itself (鈴鹿's overpass) can land on the other level, half a lap off
+function rideOffset(tr, pose) {
   if (!tr?.nearest) return { n: null, off: 0 };
-  const n = tr.nearest(new THREE.Vector3(x, y, z));
-  return { n, off: clamp(y - n.point.y, -0.5, 1) };
+  const n = tr.nearest(new THREE.Vector3(pose.x, pose.y, pose.z), pose.i);
+  return { n, off: clamp(pose.y - n.point.y, -0.5, 1) };
 }
 
 function warpDest(race, pose, dist) {
   const tr = race.track, from = new THREE.Vector3(pose.x, pose.y, pose.z);
   if (!tr?.nearest) return { pos: from.clone().add(_v.set(Math.sin(pose.h), 0, Math.cos(pose.h)).multiplyScalar(dist)), heading: pose.h };
-  const { n, off } = rideOffset(tr, pose.x, pose.y, pose.z);
+  const { n, off } = rideOffset(tr, pose);
   const nt = (n.tangent || tr.tangentAt(n.t)).clone().normalize();
   const t = (((n.t + dist / tr.length) % 1) + 1) % 1;
   const c = tr.pointAt(t).clone(), tan = tr.tangentAt(t).clone().normalize();
@@ -827,7 +855,8 @@ function warpDest(race, pose, dist) {
   const lat = clamp(_v.copy(from).sub(n.point).dot(_w.set(-nt.z, 0, nt.x).normalize()), -lim, lim);   // + = right
   const pos = c.addScaledVector(_w.set(-tan.z, 0, tan.x).normalize(), lat);
   pos.y += off;
-  return { pos, heading: pose.h + wrap(Math.atan2(tan.x, tan.z) - pose.h) };   // keep heading continuous
+  const i = Math.round(t * tr.samples.length) % tr.samples.length;   // hint for looking it up again
+  return { pos, heading: pose.h + wrap(Math.atan2(tan.x, tan.z) - pose.h), i };   // keep heading continuous
 }
 
 function warpFx(S, from, to, h0, h1) {
@@ -851,7 +880,7 @@ function spawnOil(race, S, pose, life, power, owner) {
   let tan = new THREE.Vector3(sh, 0, ch);
   const tr = race.track;
   if (tr?.nearest) {   // sit on the road surface, tilted with the slope
-    const { n: nc, off } = rideOffset(tr, pose.x, pose.y, pose.z);
+    const { n: nc, off } = rideOffset(tr, pose);
     const n = tr.nearest(pos, nc.index);
     pos.y = n.point.y + off;
     if (n.tangent) tan = n.tangent.clone().normalize();
@@ -940,7 +969,7 @@ function slowedHumans(race) {
 // best-placed other car still racing: the leader, or the 2nd when the activator leads (_.left = quit online, game-owned)
 function thunderTarget(race, car) {
   let best = null;
-  for (const c of race.cars) if (c !== car && !c.finished && !c._?.left && (!best || c.progress > best.progress)) best = c;
+  for (const c of race.cars) if (c !== car && !c.finished && !c._?.left && !away(c) && (!best || c.progress > best.progress)) best = c;
   return best;
 }
 
@@ -957,7 +986,7 @@ const magnetGap = (race, car, o) => (drawnProgress(race.track, o) - drawnProgres
 function magnetTarget(race, car, min = MAGNET_CATCH, range = MAGNET_RANGE) {
   let best = null, bg = range;
   for (const c of race.cars) {
-    if (c === car || c.finished || c._?.left) continue;
+    if (c === car || c.finished || c._?.left || away(c)) continue;
     const g = magnetGap(race, car, c);
     if (g > min && g <= bg) { bg = g; best = c; }
   }
@@ -1032,7 +1061,7 @@ function screenFlash(race, car, [bg, frames, ms] = THUNDER_SCREEN) {
 // bolt from the sky onto the target (follows it for its 0.4 s), spark burst; spin unless shielded.
 // A 'net' target's spin only turns its mesh here: its own client applies the real one.
 function strike(race, S, target, pow) {
-  if (!target?.pos) return;
+  if (!target?.pos || away(target)) return;
   const bolt = new THREE.Mesh(ribbons(jag(new THREE.Vector3(rnd(-8, 8), 75, rnd(-8, 8)), new THREE.Vector3(0, 0.9, 0), 9, 6, 2.4, [], true)), boltMat(S, '#ffffff'));
   bolt.userData.ownGeo = true;
   bolt.frustumCulled = false;
@@ -1390,6 +1419,7 @@ export function faceWall(race) {
 // target: thunderbolt victim / magnet target or null
 function start(race, car, id, dur, pow, pose, target = null) {
   const S = st(race), at = new THREE.Vector3(pose.x, pose.y, pose.z);
+  if (id === 'tokyodive') { diveStart(race, S, car, dur, pow, pose); return; }
   if (id === 'warp') {
     const d = warpDest(race, pose, pow);
     if (car && car.control !== 'net') {   // remote cars arrive via net state
@@ -1435,6 +1465,169 @@ function start(race, car, id, dur, pow, pose, target = null) {
   if (id !== 'timeslow') ring(S, _w.copy(at).setY(at.y + 0.15), COLOR[id], { r0: 1.5, r1: 6, life: 0.4, opacity: 0.8 });
 }
 
+// ---------- tokyodive ----------
+// A gate opens ahead, the car drives in (DIVE.lead s) and is away: a local driver races the pocket course
+// (tokyo-dimension.js, car._.track), a CPU is parked out of the world. It comes back along the track, from where it went
+// in, by power x (duration x top speed x DIVE.base + the farthest it got in there x DIVE.inside) - a CPU as if it drove
+// DIVE.cpuIn m/s in there. Net ~+3 s over just driving on; the pocket laps add a skill bonus. A remote diver is only hidden
+// here: its own client runs the dive and sends { out: 1 } with where it came back.
+const DIVE = { lead: 0.3, minSpeed: 15, base: 0.8, inside: 0.6, cpuIn: 45, remoteSlack: 1.5, near: 25 };
+const diveGain = (car, d, t, inside) => d.pow * (t * (car.stats?.top || 60) * DIVE.base + inside * DIVE.inside);
+const DIVE_SCREEN = ['radial-gradient(ellipse at center, rgba(255,255,255,0.95), rgba(255,140,40,0.75) 40%, rgba(255,40,160,0.7) 75%, rgba(25,10,40,0.9) 100%)',
+  [{ opacity: 0 }, { opacity: 1, offset: 0.25 }, { opacity: 0 }], 520];
+
+function diveGate(S, p, h, life, out = false) {
+  const g = makePortal(3.1);
+  g.position.set(p.x, p.y + 1.7, p.z);
+  g.rotation.y = h;
+  addFx(S, g, life, (o, k) => {
+    const tt = k * life, close = clamp((tt - (life - 0.3)) / 0.3, 0, 1);
+    o.scale.setScalar(Math.max(0.01, (out ? 1 + 0.2 * k : easeOutBack(Math.min(1, tt / 0.18))) * (1 - close)));
+    o.userData.spin(S.time);
+    o.userData.fade(1 - close * 0.6);
+  });
+  const c = _w.set(p.x, p.y + 1.7, p.z);
+  burst(S.glow, c, out ? 70 : 40, PAL.tokyodive, out ? 12 : 7, 0.55, 0.55, 0.05, 0, 2);
+  ring(S, _w.set(p.x, p.y + 0.15, p.z), COLOR.tokyodive, { r0: 1, r1: out ? 9 : 6, life: 0.5, opacity: 0.8 });
+}
+
+function place(car, pos, h) {
+  car.pos.copy(pos);
+  car.heading = h;
+  car.vel?.set(Math.sin(h), 0, Math.cos(h)).multiplyScalar(car.speed);
+  if (car.mesh) { car.mesh.position.copy(pos); car.mesh.rotation.y = h; }
+}
+
+function diveStart(race, S, car, dur, pow, pose) {
+  const spd = Math.max(0, car?.speed || 0), g = warpDest(race, pose, Math.max(5, spd * DIVE.lead + 1.5));   // along the track: through a corner too
+  diveGate(S, g.pos, g.heading, DIVE.lead + 0.45);
+  if (!car) return;
+  const a = car.ability, remote = car.control === 'net';
+  a.active = a.activeMax = DIVE.lead + dur + (remote ? DIVE.remoteSlack : 1);   // a local dive ends itself before this
+  a.power = pow;
+  a.t = 0;
+  a.dive = { t: 0, phase: 'gate', dur, pow, speed0: spd, human: isHuman(car), remote };
+}
+
+function diveStep(race, S, car, dt) {
+  const a = car.ability, d = a.dive;
+  d.t += dt;
+  if (d.phase === 'gate') {
+    if (d.t < DIVE.lead) return;
+    if (!d.remote && car.finished) {   // crossed the finish line on the way to the gate: the race is over, no dive
+      a.dive = null;
+      a.active = 0;
+      sendOut(race, car, car.pos, car.heading);   // peers hid it at their gate
+      return;
+    }
+    diveIn(race, S, car);
+    return;
+  }
+  if (d.remote) {
+    if (d.out && (car.pos.distanceTo(d.out) < DIVE.near || d.t - d.outAt > 1)) diveBack(race, S, car);
+    return;
+  }
+  d.inT += dt;
+  if (d.D) {
+    const D = d.D, tr = D.track, n = tr.nearest(car.pos, car.trackIndex), s = n.t * tr.length;
+    if (s < D.backS) {   // the wall behind the entry gate
+      const q = tr.samples[n.index], vf = car.vel.dot(q.tan);
+      car.pos.addScaledVector(q.tan, D.backS - s);
+      if (vf < 0) car.vel.addScaledVector(q.tan, -vf);
+    }
+    d.maxS = Math.max(d.maxS, s);
+    diveHud(race, S, car, `異空間ダイブ　残り ${Math.max(0, d.dur - d.inT).toFixed(1)}秒　+${Math.round(diveGain(car, d, d.inT, d.maxS - d.s0))}m`);
+    if (s >= D.exitS) { diveOut(race, S, car); return; }
+  }
+  if (d.inT >= d.dur) diveOut(race, S, car);
+}
+
+function diveIn(race, S, car) {
+  const a = car.ability, d = a.dive;
+  d.phase = 'in';
+  d.inT = 0;
+  a.away = true;
+  burst(S.glow, _w.set(car.pos.x, car.pos.y + 0.9, car.pos.z), 60, PAL.tokyodive, 10, 0.5, 0.6, 0.05, 0, 2);
+  if (d.remote) { car.mesh.visible = false; car._.away = true; return; }
+  d.entry = { x: car.pos.x, y: car.pos.y, z: car.pos.z, h: car.heading, i: car.trackIndex };
+  car._.away = true;
+  let D = null;
+  if (d.human) try { D = getDimension(race); } catch (e) { console.warn('[tokyodive]', e); }
+  if (D) {
+    d.D = D;
+    car._.track = D.track;
+    car.speed = Math.max(car.speed, DIVE.minSpeed);
+    place(car, D.start.pos, D.start.heading);
+    car.trackIndex = D.start.index;
+    d.s0 = d.maxS = D.start.s;
+    screenFlash(race, car, DIVE_SCREEN);
+    burst(S.glow, _w.copy(D.start.pos).setY(D.start.pos.y + 1.2), 80, PAL.tokyodive, 12, 0.6, 0.6, 0.05, 0, 2);
+  } else {   // CPU: parked out of the world, where nothing can meet it
+    car.mesh.visible = false;
+    car.pos.set(-ORIGIN.x - car.index * 60, -500, -ORIGIN.z);
+    car.mesh.position.copy(car.pos);
+  }
+}
+
+function diveOut(race, S, car) {
+  const a = car.ability, d = a.dive, tr = race.track, L = tr?.length || 1;
+  const e = d.entry || { x: car.pos.x, y: car.pos.y, z: car.pos.z, h: car.heading, i: car.trackIndex };
+  const dist = clamp(diveGain(car, d, d.dur, d.D ? d.maxS - d.s0 : DIVE.cpuIn * d.dur) || 0, 0, L * 0.9);   // reaching the exit early still earns the full base
+  const dest = warpDest(race, e, dist);
+  if (!d.D) car.speed = d.speed0;
+  car._.track = null;
+  car._.away = false;
+  a.away = false;
+  a.dive = null;
+  a.active = 0;
+  place(car, dest.pos, dest.heading);
+  car.mesh.visible = true;
+  if (tr?.nearest) car.trackIndex = tr.nearest(dest.pos, dest.i).index;
+  car._.jump = dist / L;
+  diveGate(S, dest.pos, dest.heading, 0.7, true);
+  if (d.D) {
+    diveHud(race, S, car, null);
+    screenFlash(race, car, DIVE_SCREEN);
+    flash(race, `${who(race, car)}+${Math.round(dist)}m!`, COLOR.tokyodive);
+  }
+  sendOut(race, car, dest.pos, dest.heading);
+}
+
+function sendOut(race, car, p, h) {   // online: where the diver is back on the track
+  if (race.net && car.control === 'p1') race.net.send({ t: 'ability', pid: race.localPid, id: 'tokyodive', out: 1, x: r2(p.x), y: r2(p.y), z: r2(p.z), h: r2(h) });
+}
+
+function diveBack(race, S, car) {   // a remote diver reappears
+  const a = car.ability;
+  a.away = false;
+  a.dive = null;
+  a.active = 0;
+  if (car._) car._.away = false;
+  if (!car._?.left) car.mesh.visible = true;
+  diveGate(S, car.pos, car.heading, 0.7, true);
+}
+
+// countdown + distance banner and a neon vignette on the diver's own viewport
+function diveHud(race, S, car, text) {
+  const key = car.control + 'dive';
+  let el = S.tint[key];
+  if (text == null) { el?.remove(); delete S.tint[key]; return; }
+  if (!el) {
+    const layer = typeof document !== 'undefined' && race.hud?.layer?.(car);
+    if (!layer) return;
+    el = S.tint[key] = document.createElement('div');
+    Object.assign(el.style, { position: 'absolute', inset: '0', pointerEvents: 'none', background: 'radial-gradient(ellipse at center, transparent 58%, rgba(255,47,158,0.16) 82%, rgba(40,8,60,0.5) 100%)' });
+    const t = document.createElement('div');
+    Object.assign(t.style, {
+      position: 'absolute', left: '50%', bottom: '112px', transform: 'translateX(-50%)', font: '800 17px system-ui,sans-serif', color: '#ffe0b8',
+      letterSpacing: '0.06em', textShadow: '0 0 10px #ff6a1f, 0 2px 6px rgba(0,0,0,.7)', whiteSpace: 'nowrap',
+    });
+    el.appendChild(t);
+    layer.appendChild(el);
+  }
+  if (el.firstChild.textContent !== text) el.firstChild.textContent = text;
+}
+
 // ---------- tint overlays for local players: slowed (timeslow) / caught in a domain / downforce speed lines ----------
 // the element is 1.8x its viewport (inset -40%), so these stops are 50% / 95% of the visible half-size
 const RAYS_MASK = 'radial-gradient(closest-side, transparent 28%, #000 53%)';
@@ -1471,10 +1664,13 @@ export function initAbility(race, car) {
   car.ability = {
     id, name: ABILITIES[id].name, gauge: 0, active: 0, activeMax: 0, power: 0, t: 0,
     slow: 0, slowVis: 0, hit: 0, fx: null, phaseSwap: null, target: null, sealed: false, domVis: 0,
-    dfVis: 0, robot: null, body: null, robotDur: 0, robotPh: 0, chained: false, chainFx: null,
+    dfVis: 0, robot: null, body: null, robotDur: 0, robotPh: 0, chained: false, chainFx: null, dive: null, away: false,
   };
   car.spin ??= 0;
   if (id === 'robotdash') attachRobot(car);
+  if (id === 'tokyodive' && isHuman(car) && race.scene) {   // build the pocket course now, while loading (not mid-race)
+    try { getDimension(race); } catch (e) { console.warn('[tokyodive] build failed', e); }
+  }
   return car.ability;
 }
 
@@ -1511,9 +1707,12 @@ export function updateAbilities(race, dt) {
     if (car.spin > 0) car.spin = Math.max(0, car.spin - dt);
     if (a.active > 0) {
       a.t += dt;
-      applyOwn(race, car, a);
-      a.active = Math.max(0, a.active - dt);
-      if (!a.active) endFx(S, car);
+      if (a.dive) diveStep(race, S, car, dt);   // may end it (came back)
+      if (a.active > 0) {
+        applyOwn(race, car, a);
+        a.active = Math.max(0, a.active - dt);
+        if (!a.active) { if (a.dive) (a.dive.remote ? diveBack : diveOut)(race, S, car); endFx(S, car); }
+      }
     } else if (running && !car.finished && car.control !== 'net' && a.gauge < 1 && !a.sealed) {
       const drift = car.stats?.driftCharge && car.drifting ? 1 + DRIFT_CHARGE : 1;
       a.gauge = Math.min(1, a.gauge + dt * (car.stats?.gaugeRate || 1) / ABILITIES[a.id].fill * drift);
@@ -1529,7 +1728,7 @@ export function updateAbilities(race, dt) {
   for (const car of race.cars) {
     let p = 0;
     for (const hz of race.hazards) if (hz.kind === 'timeslow' && hz.owner !== car) p = Math.max(p, hz.power);
-    if (car.mods?.invulnerable) p = 0;
+    if (car.mods?.invulnerable || away(car)) p = 0;
     car.ability.slow = p;
     if (p && car.mods) car.mods.speedMul *= Math.max(0, 1 - p);
   }
@@ -1613,7 +1812,7 @@ export function tryActivate(race, car) {
   }
   const def = ABILITIES[a.id];
   let dur = def.duration * (car.stats?.abilityDuration || 1), pow = def.power * (car.stats?.abilityPower || 1);
-  const pose = { x: car.pos.x, y: car.pos.y, z: car.pos.z, h: car.heading };
+  const pose = { x: car.pos.x, y: car.pos.y, z: car.pos.z, h: car.heading, i: car.trackIndex };
   a.gauge = 0;
   // before start(): in split screen a thunderbolt victim's '落雷!' must be the flash that stays
   if (isHuman(car)) flash(race, who(race, car) + def.name + '!', COLOR[a.id]);
@@ -1648,10 +1847,37 @@ export function applyRemoteAbility(race, msg) {
   // peer data is untrusted: cap at 2x base (skill tree max is +25%)
   const dur = clamp(num(msg.dur, def.duration * (car?.stats?.abilityDuration || 1)), 0, def.duration * 2);
   const pow = clamp(num(msg.pow, def.power * (car?.stats?.abilityPower || 1)), 0, def.power * 2);
-  const pose = { x: num(msg.x, car?.pos.x ?? 0), y: num(msg.y, car?.pos.y ?? 0), z: num(msg.z, car?.pos.z ?? 0), h: num(msg.h, car?.heading ?? 0) };
+  const pose = { x: num(msg.x, car?.pos.x ?? 0), y: num(msg.y, car?.pos.y ?? 0), z: num(msg.z, car?.pos.z ?? 0), h: num(msg.h, car?.heading ?? 0), i: car?.trackIndex };
   const target = msg.tp != null ? race.cars.find(c => c.pid != null && String(c.pid) === String(msg.tp)) || null : null;
+  if (msg.id === 'tokyodive' && msg.out) {   // the diver came back there: show it once its car gets there
+    const d = car?.ability?.dive;
+    if (d?.remote) { d.out = new THREE.Vector3(pose.x, pose.y, pose.z); d.outAt = d.t; }
+    return;
+  }
   start(race, car, msg.id, dur, pow, pose, target);
   if (msg.id === 'timeslow' && slowedHumans(race)) flash(race, `${car ? car.name + 'の' : ''}${def.name}!`, COLOR.timeslow);
+}
+
+// online: every 'state' of a remote car says whether it is away in its own space (aw). The one-shot ability message
+// can be dropped, and a sender slower than this client dives longer than the timeout here: the stream keeps it hidden.
+export function netAway(race, car, away, msg) {
+  const a = car?.ability;
+  if (!a || a.id !== 'tokyodive') return;
+  let d = a.dive;
+  if (away) {
+    if (!d) {   // its ability message never came
+      d = a.dive = { t: DIVE.lead, phase: 'gate', remote: true };
+      a.power = a.t = 0;
+      a.activeMax = DIVE.remoteSlack;
+    }
+    if (!d.remote) return;
+    if (d.phase === 'gate') diveIn(race, st(race), car);
+    d.aw = true;
+    a.active = Math.max(a.active, DIVE.remoteSlack);
+  } else if (d?.remote && d.aw && !d.out) {   // the first state from back on the track
+    d.out = new THREE.Vector3(+msg.x || 0, +msg.y || 0, +msg.z || 0);
+    d.outAt = d.t;
+  }
 }
 
 export function clearAbilities(race) {
@@ -1672,8 +1898,9 @@ export function clearAbilities(race) {
     if (a.body) { a.body.visible = true; a.body.scale.setScalar(1); a.body.rotation.y = 0; }
     if (a.robot) a.robot.visible = false;   // stays under the car mesh: stopRace disposes it with the scene
     a.active = a.slow = a.slowVis = a.domVis = a.dfVis = a.robotPh = 0;
-    a.sealed = false;
-    a.target = null;
+    a.sealed = a.away = false;
+    a.target = a.dive = null;
+    if (car._) { car._.away = false; car._.track = null; }
   }
   const S = STATE.get(race);
   if (!S) return;
