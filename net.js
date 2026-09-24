@@ -18,6 +18,7 @@ const FIND_TIMEOUT = 8000;       // no retained room message -> room doesn't exi
 const JOIN_TIMEOUT = 25000;      // whole join, incl. broker connect
 const RESULTS_WAIT = 30000;      // after the first finisher
 const HB_EVERY = 2000, HB_DEAD = 15000;   // generous: background tabs throttle timers
+const READY_WAIT = 20000;        // start without a player whose race is still loading after this
 const HEX = /^#[0-9a-f]{6}$/i;
 const GAME = new Set(['state', 'ability', 'finish']);
 
@@ -137,6 +138,24 @@ export async function hostRoom(name) {
     emit('leave', m);
     pushRoster();
     checkDone();
+    checkReady();
+  }
+
+  // Everyone has loaded the race (or READY_WAIT passed): one 'go' starts all countdowns together.
+  function markReady(p) {
+    const r = race;
+    if (!r) return;
+    if (r.went) { if (p !== pid) pub('a', { t: 'go' }); return; }   // straggler after a forced start
+    r.ready.add(p);
+    checkReady();
+  }
+  function checkReady(force) {
+    const r = race;
+    if (!r || r.went || !(force || r.pids.every(p => r.ready.has(p) || !inRoster(p)))) return;
+    r.went = true;
+    clearTimeout(r.readyTimer);
+    pub('a', { t: 'go' });
+    emit('go', { t: 'go' });
   }
 
   function onControl(m) {
@@ -153,6 +172,7 @@ export async function hostRoom(name) {
     if (!inRoster(p)) return;
     seen.set(p, Date.now());
     if (m.t === 'me') setEntry(p, m);
+    else if (m.t === 'ready') markReady(p);
   }
 
   // Everyone's game traffic (the host's own comes back too: MQTT echoes to subscribers).
@@ -190,7 +210,7 @@ export async function hostRoom(name) {
     if (closed) return;
     closed = true;
     clearInterval(hb);
-    if (race) clearTimeout(race.timer);
+    if (race) { clearTimeout(race.timer); clearTimeout(race.readyTimer); }
     race = null;
     removeEventListener('pagehide', close);
     pub('a', { t: 'closed' });
@@ -205,9 +225,11 @@ export async function hostRoom(name) {
     on: ee.on,
     setMe: me => setEntry(pid, me),
     send: msg => { if (!closed && GAME.has(msg?.t)) pub('g', { ...msg, pid }, { qos: msg.t === 'state' ? 0 : 1 }); },
+    ready: () => markReady(pid),
     startGame() {
-      if (race) clearTimeout(race.timer);
-      race = { pids: s.roster.map(e => e.pid), times: new Map(), prog: new Map(), timer: null };
+      if (race) { clearTimeout(race.timer); clearTimeout(race.readyTimer); }
+      const r = race = { pids: s.roster.map(e => e.pid), times: new Map(), prog: new Map(), timer: null, ready: new Set(), went: false };
+      r.readyTimer = setTimeout(() => { if (race === r) checkReady(true); }, READY_WAIT);
       const m = { t: 'start', roster: s.roster };
       pub('a', m);
       emit('start', m);
@@ -225,7 +247,7 @@ export async function joinRoom(code, name, me = {}) {
   const client = await connectBroker(BROKERS[brokerOf(code)], { topic: `${base}/h`, payload: JSON.stringify({ t: 'bye', pid }), qos: 1, retain: false });
 
   const ee = emitter();
-  let joined = false, found = false, closed = false, last = Date.now(), hb = 0, helloT = 0, resolveJoin, rejectJoin;
+  let joined = false, found = false, closed = false, last = Date.now(), hb = 0, helloT = 0, readyT = 0, resolveJoin, rejectJoin;
   const joinP = new Promise((res, rej) => { resolveJoin = res; rejectJoin = rej; });
   const emit = (t, p) => { if (!closed) ee.emit(t, p); };
   const findT = setTimeout(() => { if (!found) fail('部屋が見つかりません'); }, FIND_TIMEOUT);
@@ -247,6 +269,8 @@ export async function joinRoom(code, name, me = {}) {
     if (m.t === 'hb') return;
     if (m.t === 'full') { if (m.to === pid) fail(m.started ? 'レースが始まっています' : '満員です'); return; }
     if (m.t === 'closed') return lost();
+    if (m.t === 'go') clearInterval(readyT);
+    if (m.t === 'start') clearInterval(readyT);
     if (m.t === 'roster' || m.t === 'start') s.roster = Array.isArray(m.roster) ? m.roster : s.roster;
     if (!joined) {
       if (m.t !== 'roster' || !s.roster.some(e => e.pid === pid)) return;
@@ -262,7 +286,7 @@ export async function joinRoom(code, name, me = {}) {
   function close() {
     if (closed) return;
     closed = true;
-    clearTimeout(findT); clearTimeout(joinT); clearInterval(helloT); clearInterval(hb);
+    clearTimeout(findT); clearTimeout(joinT); clearInterval(helloT); clearInterval(hb); clearInterval(readyT);
     removeEventListener('pagehide', close);
     pub('h', { t: 'bye', pid });
     client.end(false);
@@ -287,6 +311,12 @@ export async function joinRoom(code, name, me = {}) {
     roster: [],
     on: ee.on,
     setMe: m => pub('h', { ...m, t: 'me', pid }),
+    ready() {   // repeat until the host's 'go' (a QoS1 publish can still be lost across a broker reconnect)
+      clearInterval(readyT);
+      const say = () => pub('h', { t: 'ready', pid });
+      say();
+      readyT = setInterval(say, 3000);
+    },
     send: msg => { if (!closed && GAME.has(msg?.t)) pub('g', { ...msg, pid }, { qos: msg.t === 'state' ? 0 : 1 }); },
     close,
   };

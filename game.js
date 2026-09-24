@@ -158,6 +158,11 @@ async function setup(ctx, root, opts, mode) {
   loading.remove();
   ctx.last = performance.now();
   ctx.raf = requestAnimationFrame(t => frame(ctx, t));
+  // online: everyone loads at a different speed, so hold the countdown until the host's 'go' (sent once all are ready)
+  if (race.net) {
+    ctx.holdStart = true;
+    try { race.net.ready?.(); } catch (e) { console.warn(e); }
+  }
 }
 
 export function stopRace() {
@@ -1322,6 +1327,7 @@ function hookNet(ctx) {
     if (Number.isFinite(msg.lap)) car.lap = msg.lap;
     if (Number.isFinite(msg.p)) car.progress = msg.p;
   });
+  on('go', () => { if (!ctx.goAt) ctx.goAt = performance.now() + 3900; });   // same 3.9 s lead-in as offline
   on('ability', msg => { if (R === ctx && String(msg.pid) !== String(race.localPid)) applyRemoteAbility(race, msg); });
   on('finish', msg => {
     const car = byPid.get(String(msg.pid));
@@ -1396,7 +1402,9 @@ function update(ctx, dt) {
 
   // countdown
   if (race.state === 'countdown') {
-    ctx.count -= dt;
+    if (!ctx.holdStart) ctx.count -= dt;
+    else if (ctx.goAt) ctx.count = (ctx.goAt - performance.now()) / 1000;   // wall clock: frame drops can't desync the start
+    else if (ctx.clock - (ctx.waitMsgAt ?? -9) > 2.5) { ctx.waitMsgAt = ctx.clock; flashAll(ctx, '他のプレイヤーを待っています…', '#9fe8ff'); }
     const n = Math.ceil(ctx.count);
     if (n !== ctx.lastCount && n >= 1 && n <= 3) {
       for (const v of ctx.views) pop(v.hud.count, String(n), '#ffffff');
