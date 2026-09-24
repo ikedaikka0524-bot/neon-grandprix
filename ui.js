@@ -496,13 +496,14 @@ async function launch(opts, screen) {
     await startRace({
       ...opts,
       onFinish: res => { if (tok === raceTok) onFinish(res); },
-      onQuit: () => { if (tok === raceTok) endRace(); },
+      onQuit: () => { if (tok === raceTok) quitRace(); },
     });
   } catch (e) {
     console.error('startRace failed', e);
-    if (tok === raceTok) { endRace(); toast('レースを開始できませんでした', 'err'); }
+    if (tok === raceTok) { quitRace(); toast('レースを開始できませんでした', 'err'); }
   }
   if (tok !== raceTok) return;
+  race.live = true;   // the game's net handlers are hooked from here on
   w.className = 'out';
   setTimeout(() => { if (w.className === 'out') w.className = ''; }, 600);
 }
@@ -518,6 +519,12 @@ function endRace() {
   const back = race?.screen || 'home';
   teardownRace();
   show(back, false);
+}
+// Quit from the race (Esc → 終了する) or a failed start. Online that means leaving the room ('オンライン対戦から退出します'),
+// so the others get 'leave' (car removed, results not held up) and a quitting host can't restart over live races.
+function quitRace() {
+  if (race?.opts.mode === 'online') leaveRoom();
+  endRace();
 }
 
 function onFinish(res) {
@@ -617,10 +624,10 @@ function hideResults() { $('#results').classList.add('hidden'); $('#rConfetti').
 const NET = { s: null, offs: [], busy: false, roster: null };
 const roster = () => (NET.roster || NET.s?.roster || []).slice(0, 4);
 function status(msg, kind = '') { const el = $('#onStatus'); el.textContent = msg; el.className = 'status ' + kind; }
+const me = () => { const id = save.selected.p1; return { name: save.name, carId: id, look: { ...save.cars[id].look } }; };
 function myNet() {
   if (!NET.s) return;
-  const id = save.selected.p1;
-  try { NET.s.setMe({ name: save.name, carId: id, look: { ...save.cars[id].look } }); } catch (e) { console.warn(e); }
+  try { NET.s.setMe(me()); } catch (e) { console.warn(e); }
 }
 function renderOnline() {
   const s = NET.s;
@@ -659,7 +666,7 @@ async function connect(host) {
   renderOnline();
   status(host ? '部屋を作成中…' : '接続中…', 'busy');
   try {
-    const s = host ? await hostRoom(save.name) : await joinRoom(code, save.name);
+    const s = host ? await hostRoom(save.name) : await joinRoom(code, save.name, me());
     NET.s = s; NET.roster = null;
     NET.offs = [
       s.on('roster', m => { const a = Array.isArray(m) ? m : m?.roster; if (Array.isArray(a)) NET.roster = a; renderRoster(); }),
@@ -685,13 +692,16 @@ function leaveRoom() {
   try { s.close(); } catch { /* ignore */ }
 }
 function onNetClosed() {
-  const wasOnline = race?.opts.mode === 'online';
+  const r = race?.opts.mode === 'online' ? race : null;
   leaveRoom();
-  if (wasOnline) teardownRace();
   modalClose?.();
-  if (wasOnline || cur === 'online') show('online', false);
   sfx.error();
   toast('接続が切れました（ホストが退出した可能性があります）', 'err');
+  // A running race handles 'closed' itself (this handler runs first): it finalizes a finished run or quits via onQuit,
+  // and results already on screen stay readable.
+  if (r?.live) return;
+  if (r) teardownRace();
+  if (r || cur === 'online') show('online', false);
 }
 function onNetStart(m) {
   const s = NET.s;
@@ -955,7 +965,9 @@ function renderTree() {
   if (!save.cars[treeCar]) treeCar = save.selected.p1;
   const id = treeCar, c = CAR_BY_ID[id], rec = save.cars[id];
   $('#tCars').innerHTML = owned().map(o => `<button class="tchip ${o.id === id ? 'on' : ''}" data-tcar="${o.id}" style="--rc:${RARITY[o.rarity].color}">${rb(o.rarity)}${esc(o.name)}</button>`).join('');
-  $('#tCars .on')?.scrollIntoView({ inline: 'center', block: 'nearest' });
+  // centre the chip horizontally only: scrollIntoView would also scroll #main back up on phones (list below the tree)
+  const strip = $('#tCars'), chip = $('.on', strip);
+  if (chip) strip.scrollLeft += chip.getBoundingClientRect().left - strip.getBoundingClientRect().left - (strip.clientWidth - chip.offsetWidth) / 2;
   mount($('#tSlot'), [S1], 0.4);
   S1.set(id, rec.look);
   $('#tSvg').innerHTML = treeSVG(id, rec);
@@ -968,7 +980,8 @@ function renderTree() {
     ${barsHTML(id, rec.nodes)}${list}<p class="hint">ノードをクリック（タップ）して解放。コインはレースで稼げます。</p>`;
 }
 async function clickNode(nid) {
-  const id = treeCar, rec = save.cars[id], n = NODE_BY_ID[nid];
+  const id = treeCar, n = NODE_BY_ID[nid];
+  let rec = save.cars[id];
   if (!rec || !n) return;
   const why = nodeBlockReason(rec, nid);
   if (why) { if (why !== '解放済み') { sfx.error(); toast(why, 'err'); } return; }
@@ -979,7 +992,8 @@ async function clickNode(nid) {
     html: `<p>「${esc(n.name)}」を解放しますか？</p>${n.desc ? `<p>${esc(n.desc)}</p>` : ''}<p>費用 <b>${cost.toLocaleString()}</b> コイン（所持 ${save.coins.toLocaleString()}）</p>${ok ? '' : '<p class="err">コインが足りません</p>'}`,
     yes: '解放する', yesDisabled: !ok,
   });
-  if (!yes || treeCar !== id || nodeBlockReason(rec, nid) || save.coins < cost) return;
+  rec = save.cars[id];   // another tab may have replaced the save while the dialog was open
+  if (!yes || !rec || treeCar !== id || nodeBlockReason(rec, nid) || save.coins < cost) return;
   save.coins -= cost;
   rec.nodes.push(nid);
   persist();

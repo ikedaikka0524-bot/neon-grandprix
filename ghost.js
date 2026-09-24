@@ -30,7 +30,10 @@ export function createRecorder(car) {
       if (car.finished) done = true;
     },
     finish(totalTime) {
-      if (!frames.length) frames.push(pose().map((v, i) => (i === 4 ? r4(v) : r2(v))));
+      // end on the finish-line pose: the last 0.05 s slot can predate the crossing (or a warp over the line),
+      // leaving the ghost's final progress short of the line and the HUD diff blank there
+      const end = pose().map((v, i) => (i === 4 ? r4(v) : r2(v)));
+      if (!frames.length || frames[frames.length - 1][4] < end[4]) frames.push(end);
       return { v: 1, carId: car.carId, look: { ...car.look }, time: Math.round(totalTime * 1000) / 1000, dt: DT, frames };
     },
   };

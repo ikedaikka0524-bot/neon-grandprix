@@ -37,6 +37,13 @@ export function persist() {
   try { localStorage.setItem(KEY, JSON.stringify(getSave())); } catch {}
 }
 
+// Another tab wrote the save (storage event): drop the cached copy so this tab doesn't overwrite it with stale data.
+export function reloadSave(e) {
+  if (e && e.key !== KEY && e.key !== null) return null;   // null key = storage cleared
+  data = null;
+  return getSave();
+}
+
 export function resetSave() {
   try { localStorage.removeItem(KEY); } catch {}
   data = null;

@@ -542,7 +542,7 @@ function spawnOil(race, S, pose, life, power, owner) {
 
   const ph = rnd(0, 6);
   race.hazards.push({
-    kind: 'oil', pos, radius: OIL_RADIUS, owner, power, life, age: 0, hits: new Set(),
+    kind: 'oil', pos, radius: OIL_RADIUS, owner, power, life, age: 0, hits: new Set(), last: new Map(),
     update(dt) {
       this.age += dt;
       const fade = clamp((this.life - this.age) / 1.5, 0, 1);
@@ -552,7 +552,12 @@ function spawnOil(race, S, pose, life, power, owner) {
       sheen.material.opacity = (0.16 + 0.06 * Math.sin(S.time * 2.1 + ph)) * fade;
       for (const c of race.cars) {
         if (c === this.owner || c.control === 'net' || c.finished || this.hits.has(c)) continue;
-        const dx = c.pos.x - pos.x, dz = c.pos.z - pos.z;
+        // swept: closest point of the path since the last frame (fast cars at low fps step over the slick);
+        // a jump longer than 12 m is a warp / respawn, test only where the car landed
+        const p = this.last.get(c) || { x: c.pos.x, z: c.pos.z }, ex = c.pos.x - p.x, ez = c.pos.z - p.z, L = ex * ex + ez * ez;
+        const s = L > 0 && L < 144 ? clamp(((pos.x - p.x) * ex + (pos.z - p.z) * ez) / L, 0, 1) : 1;
+        this.last.set(c, { x: c.pos.x, z: c.pos.z });
+        const dx = p.x + ex * s - pos.x, dz = p.z + ez * s - pos.z;
         if (dx * dx + dz * dz > OIL_RADIUS * OIL_RADIUS || Math.abs(c.pos.y - pos.y) > 2.5) continue;
         this.hits.add(c);
         oilHit(race, S, c, this.power);

@@ -134,9 +134,13 @@ async function setup(ctx, root, opts, mode) {
   // ---- input / misc DOM
   ctx.modal = el(wrap, 'div', 'rg-modal', `<div class="rg-modal-box"><h2>レースを終了しますか？</h2>
     <p>${mode === 'online' ? 'オンライン対戦から退出します' : '進行中のレースは記録されません'}</p>
-    <div class="rg-modal-btns"><button class="rg-btn rg-cancel">続ける <kbd>Esc</kbd></button><button class="rg-btn rg-ok">終了する <kbd>Enter</kbd></button></div></div>`);
+    <div class="rg-modal-btns"><button class="rg-btn rg-cancel">続ける <kbd>Esc</kbd></button><button class="rg-btn rg-ok">終了する <kbd>${mode === 'split' ? 'Y' : 'Enter'}</kbd></button></div></div>`);
   ctx.modal.querySelector('.rg-cancel').addEventListener('click', () => closeQuit(ctx));
   ctx.modal.querySelector('.rg-ok').addEventListener('click', () => confirmQuit(ctx));
+  // touch / mouse way into the quit prompt (Esc is the only other one)
+  const quitBtn = el(wrap, 'button', 'rg-quit', '✕');
+  quitBtn.setAttribute('aria-label', 'レースを終了');
+  quitBtn.addEventListener('click', () => { quitBtn.blur(); if (!ctx.finalized && !ctx.quitOpen) openQuit(ctx); });
   const hint = el(wrap, 'div', 'rg-hint', mode === 'split'
     ? 'P1: WASD + L-Shift　P2: 矢印 + R-Shift　Esc: 終了　M: 音'
     : 'WASD/矢印: 運転　Space: 能力　R: コースに戻る　Esc: 終了　M: 音');
@@ -146,6 +150,10 @@ async function setup(ctx, root, opts, mode) {
   listen(ctx, window, 'keyup', e => onKey(ctx, e, false));
   listen(ctx, window, 'blur', () => ctx.keys.clear());
   listen(ctx, window, 'resize', () => resize(ctx));
+  // hidden tab: RAF stops but the AudioContext would keep droning the last engine/skid levels
+  listen(ctx, document, 'visibilitychange', () => {
+    if (document.hidden) ctx.audio?.ac.suspend().catch(() => {}); else ctx.audio?.resume();
+  });
   resize(ctx);
   loading.remove();
   ctx.last = performance.now();
@@ -162,12 +170,14 @@ export function stopRace() {
   for (const [t, ev, fn] of ctx.listeners) t.removeEventListener(ev, fn);
   for (const off of ctx.offs) { try { off(); } catch { /* ignore */ } }
   try { if (ctx.race) clearAbilities(ctx.race); } catch (e) { console.warn(e); }
-  try { ctx.ghost?.dispose?.(); } catch (e) { console.warn(e); }
   try { ctx.audio?.close(); } catch { /* ignore */ }
-  ctx.world.traverse(o => {
+  // Whole scene, not just the world: car / ghost meshes share carmodel.js's cached GLB geometry and textures, whose
+  // per-renderer 'dispose' listeners would otherwise keep every old renderer alive (shared ones just re-upload).
+  (ctx.scene || ctx.world).traverse(o => {
     if (o.geometry) o.geometry.dispose();
     for (const m of [].concat(o.material || [])) { for (const v of Object.values(m)) if (v && v.isTexture) v.dispose(); m.dispose(); }
   });
+  try { ctx.ghost?.dispose?.(); } catch (e) { console.warn(e); }
   for (const p of ctx.fx) { p.points.geometry.dispose(); p.points.material.dispose(); }
   ctx.skids?.mesh.geometry.dispose();
   ctx.envRT?.dispose();
@@ -199,7 +209,11 @@ function buildEntries(opts, mode) {
       nodes.push(...br.nodes.slice(0, k).map(n => n.id));
     }
     let body = def.color;
-    if (players.some(p => p.carId === def.id)) body = '#' + new THREE.Color(def.color).offsetHSL(0.5, 0, 0).getHexString();
+    if (players.some(p => p.carId === def.id)) {
+      // a hue shift does nothing to white / grey paint: give those a vivid colour instead
+      const c = new THREE.Color(def.color);
+      body = '#' + (c.getHSL({}).s < 0.25 ? c.setHSL(Math.random(), 0.8, 0.5) : c.offsetHSL(0.5, 0, 0)).getHexString();
+    }
     cpus.push({ name: 'CPU ' + names[i % names.length], carId: def.id, look: { body, wheel: '#222222', wing: Math.random() < 0.3 }, stats: computeStats(def.id, nodes), control: 'cpu' });
   }
   return { list: [...players, ...cpus], grid: [...cpus, ...players] };  // solo: player starts at the back
@@ -923,9 +937,12 @@ function onKey(ctx, e, down) {
   if (!down) { ctx.keys.delete(e.code); return; }
   if (ctx.finalized) return;   // results screen belongs to the UI now
   ctx.audio?.resume();
-  if (e.code === 'Escape') { e.preventDefault(); ctx.quitOpen ? closeQuit(ctx) : openQuit(ctx); return; }
+  if (e.code === 'Escape') { e.preventDefault(); if (!e.repeat) ctx.quitOpen ? closeQuit(ctx) : openQuit(ctx); return; }
   if (ctx.quitOpen) {
-    if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.code === 'KeyY') { e.preventDefault(); confirmQuit(ctx); }
+    if (GAME_KEYS.has(e.code)) e.preventDefault();
+    if (e.repeat) return;
+    // split: Enter is P2's ability key, so only Y confirms
+    if (e.code === 'KeyY' || (ctx.mode !== 'split' && (e.code === 'Enter' || e.code === 'NumpadEnter'))) confirmQuit(ctx);
     else if (e.code === 'KeyN') closeQuit(ctx);
     return;
   }
@@ -1129,11 +1146,14 @@ function settle(car) {
   car._.s = car.speed;
 }
 
+const NET_STALE = 1;   // s without 'state': the peer is loading, hidden or gone, so its frozen car must not be a wall
+
 function collide(ctx) {
-  const cars = ctx.race.cars;
+  const cars = ctx.race.cars, now = performance.now() / 1000;
+  const solid = c => !c._.left && !c.mods.noCollide && (c.control !== 'net' || now - (c._.buf.at(-1)?.t ?? -Infinity) < NET_STALE);
   for (let i = 0; i < cars.length; i++) for (let j = i + 1; j < cars.length; j++) {
     const a = cars[i], b = cars[j];
-    if ((a.control === 'net' && b.control === 'net') || a._.left || b._.left || a.mods.noCollide || b.mods.noCollide) continue;
+    if ((a.control === 'net' && b.control === 'net') || !solid(a) || !solid(b)) continue;
     if ((b.pos.x - a.pos.x) ** 2 + (b.pos.z - a.pos.z) ** 2 > 30) continue;
     let best = null;
     const afx = Math.sin(a.heading), afz = Math.cos(a.heading), bfx = Math.sin(b.heading), bfz = Math.cos(b.heading);
@@ -1176,12 +1196,14 @@ function impact(ctx, x, y, z, strength, cars) {
 function updateProgress(ctx, car) {
   const c = car._, t = c.t;
   if (c.prevT == null) c.prevT = t;
+  let crossed = false;
   if (c.prevT > 0.75 && t < 0.25) {
-    if (c.halfway) { c.crossings++; c.halfway = false; lapCross(ctx, car); }
+    if (c.halfway) { c.crossings++; c.halfway = false; crossed = true; }
   } else if (c.prevT < 0.25 && t > 0.75) { c.crossings--; c.halfway = true; }
   if (t > 0.4 && t < 0.6) c.halfway = true;
   c.prevT = t;
   car.progress = c.crossings - 1 + t;
+  if (crossed) lapCross(ctx, car);   // after progress: finishCar's ghost sample must see the finish-line progress
 }
 
 function lapCross(ctx, car) {
@@ -1213,7 +1235,7 @@ function finishCar(ctx, car) {
     ctx.glow.spawn(car.pos.x, car.pos.y + 3, car.pos.z, Math.cos(a) * sp, 6 + Math.random() * 8, Math.sin(a) * sp, 1.6 + Math.random(), 0.5, 0.3, Math.random(), Math.random(), Math.random(), 1, 9, 1.2);
   }
   if (ctx.audio) [523, 659, 784, 1047].forEach((f, i) => ctx.timers.push(setTimeout(() => ctx.audio?.beep(f, 0.3, 0.16), i * 110)));
-  if (car.control === 'p1' && race.net) race.net.send({ t: 'finish', pid: race.localPid, time: r3(car.finishTime) });
+  if (car.control === 'p1' && race.net && !ctx.finalized) race.net.send({ t: 'finish', pid: race.localPid, time: r3(car.finishTime) });
   if (car.control === 'p1' && ctx.recorder) {
     try { ctx.recorder.sample(race); ctx.ghostRec = ctx.recorder.finish(car.finishTime); } catch (e) { console.warn('ghost finish failed', e); }
   }
@@ -1235,7 +1257,7 @@ function localPlacements(ctx) {
   const list = race.cars.map(car => {
     let time = car.finished ? car.finishTime : null;
     if (time == null && ctx.mode === 'solo' && car.control === 'cpu' && car.progress > 0.05 && race.time > 0) {
-      time = race.time + Math.max(0.5, TRACK.laps - car.progress) * (race.time / car.progress);
+      time = race.time + Math.max(0, TRACK.laps - car.progress) * (race.time / car.progress);
     }
     return { car, name: car.name, carId: car.carId, time: time == null ? null : r2(time), isLocal: isLocal(car), control: car.control };
   });
@@ -1314,13 +1336,15 @@ function hookNet(ctx) {
     for (const car of race.cars) if (!seen.has(car)) list.push({ car, name: car.name, carId: car.carId, time: null, isLocal: car.control === 'p1', control: car.control });
     finalize(ctx, list);
   });
-  on('leave', msg => {
-    const car = byPid.get(String(msg.pid));
-    if (!car || car.control !== 'net') return;
+  const leave = car => {
+    if (!car || car.control !== 'net' || car._.left) return;
     car._.left = true;
     car.mesh.visible = false;
     flashAll(ctx, `${car.name} が退出しました`, '#ffb3b3');
-  });
+  };
+  on('leave', msg => leave(byPid.get(String(msg.pid))));
+  // a 'leave' sent while this peer was still loading the race had no listener yet: reconcile with the live roster
+  if (Array.isArray(net.roster)) for (const car of byPid.values()) if (!net.roster.some(e => String(e.pid) === String(car.pid))) leave(car);
   on('closed', () => {
     if (R !== ctx || ctx.finalized) return;
     const p1 = race.cars.find(c => c.control === 'p1');
@@ -1333,7 +1357,7 @@ function hookNet(ctx) {
 function netInterp(car, nowS) {
   const b = car._.buf;
   if (!b.length) return;
-  const rt = nowS - 0.1;
+  const rt = nowS - 0.15;   // relay via MQTT broker: ~100 ms one way plus jitter
   let a = b[0], nx = null;
   for (let i = b.length - 1; i >= 0; i--) if (b[i].t <= rt) { a = b[i]; nx = b[i + 1] || null; break; }
   let x, y, z, h, s;
@@ -1675,6 +1699,8 @@ const CSS = `
 .rg-map{position:absolute;right:16px;bottom:16px;width:176px;height:176px;transform:scale(var(--z));transform-origin:100% 100%;border-radius:16px;background:rgba(10,14,24,.5);border:1px solid rgba(255,255,255,.18);backdrop-filter:blur(4px)}
 .rg-hint{position:absolute;left:50%;bottom:4px;transform:translateX(-50%);font-size:12px;opacity:.75;background:rgba(0,0,0,.4);padding:3px 12px;border-radius:999px;transition:opacity 1s;z-index:4;white-space:nowrap}
 .rg-hint.off{opacity:0}
+.rg-quit{position:absolute;left:50%;top:10px;transform:translateX(-50%);z-index:5;width:36px;height:36px;padding:0;border-radius:50%;border:1px solid rgba(255,255,255,.3);background:rgba(0,0,0,.4);color:#fff;font:700 16px system-ui,sans-serif;cursor:pointer;opacity:.7}
+.rg-quit:hover{opacity:1}
 .rg-modal{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(4,6,12,.6);backdrop-filter:blur(4px);z-index:10}
 .rg-modal.on{display:flex}
 .rg-modal-box{min-width:320px;padding:28px 34px;border-radius:18px;text-align:center;background:linear-gradient(160deg,#18203a,#0e1322);border:1px solid rgba(120,160,255,.35);box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 30px rgba(41,216,255,.15)}

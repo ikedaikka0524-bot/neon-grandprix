@@ -140,7 +140,7 @@ export async function createGhostPlayer(race, ghostData) -> {
 Star topology over PeerJS: host's peer id = `crg26-` + CODE (5 chars, A–Z/2–9, shown to user). Host relays every client message to all other clients (and delivers to itself).
 ```js
 export async function hostRoom(name) -> NetSession
-export async function joinRoom(code, name) -> NetSession   // rejects with Japanese message on failure/timeout (10 s)
+export async function joinRoom(code, name, me? /* { carId, look }, sent with hello */) -> NetSession   // rejects with Japanese message on failure/timeout (10 s)
 NetSession = {
   isHost, code, pid /* own id */,
   roster: [{ pid, name, carId, look }],        // host first. Max 4 players; 5th gets {t:'full'} and is closed.
