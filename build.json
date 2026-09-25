@@ -1,5 +1,5 @@
 {
-  "build": "20260924205803",
+  "build": "20260925034457",
   "files": [
     "abilities.js",
     "carmodel.js",
@@ -11,6 +11,7 @@
     "net.js",
     "netpredict.js",
     "p2p.js",
+    "pwa.js",
     "save.js",
     "scenery/albertpark.js",
     "scenery/bahrain.js",
@@ -35,6 +36,7 @@
     "theme-desert.js",
     "theme-snow.js",
     "tokyo-dimension.js",
+    "touch.js",
     "tracks.js",
     "ui.js",
     "version.js",

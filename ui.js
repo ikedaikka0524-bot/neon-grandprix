@@ -8,7 +8,8 @@ import {
 import { TRACKS, TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
 import { getSave, persist, newCarRec, resetSave, reloadSave, loadGhost, saveGhost } from './save.js';
 import { buildCarMesh, preloadCarModels } from './carmodel.js';
-import { startRace, stopRace } from './game.js';
+import { startRace, stopRace, raceBack } from './game.js';
+import { mountTouchSettings } from './touch.js';
 import { hostRoom, joinRoom } from './net.js';
 import { BUILD } from './version.js';
 import { lbReady, lbTop, lbGhost, lbQueue, lbFlush, lbPending, lbNeedsReload, nameAsked, setNameAsked, rarityOf, rankText } from './lb.js';
@@ -45,7 +46,7 @@ function tone(freq, dur = 0.12, type = 'sine', vol = 0.1, when = 0, slideTo = 0)
   if (save.sound === false) return;
   try {
     AC ||= new (window.AudioContext || window.webkitAudioContext)();
-    if (AC.state === 'suspended') AC.resume();
+    if (AC.state !== 'running') AC.resume().catch(() => {});   // iOS: also 'interrupted' (call / app switch)
     const t = AC.currentTime + when, o = AC.createOscillator(), g = AC.createGain();
     o.type = type;
     o.frequency.setValueAtTime(freq, t);
@@ -478,6 +479,7 @@ function renderCourses(box, sel, { ro = false, ghost = false } = {}) {
   if (c) {
     const br = box.getBoundingClientRect(), cr = c.getBoundingClientRect();
     if (cr.left < br.left || cr.right > br.right) box.scrollLeft += cr.left - br.left - (box.clientWidth - c.offsetWidth) / 2;
+    if (cr.top < br.top || cr.bottom > br.bottom) box.scrollTop += cr.top - br.top - (box.clientHeight - c.offsetHeight) / 2;   // vertical list (ranking, landscape phones)
   }
 }
 function pickTrack(tid) {
@@ -958,7 +960,7 @@ async function playFx(results) {
   g.classList.add('p-reveal');
   if (results.length > 1) gridFx(results);
   reveal(best);
-  $('#gOk').focus();
+  $('#gOk').focus({ preventScroll: true });   // phones: keep the big reveal in view, the 10連 cards are below
   await new Promise(r => { $('#gOk').onclick = r; });
   g.className = 'hidden';
 }
@@ -1064,6 +1066,9 @@ function renderTree() {
   // centre the chip horizontally only: scrollIntoView would also scroll #main back up on phones (list below the tree)
   const strip = $('#tCars'), chip = $('.on', strip);
   if (chip) strip.scrollLeft += chip.getBoundingClientRect().left - strip.getBoundingClientRect().left - (strip.clientWidth - chip.offsetWidth) / 2;
+  // phones pan a tree wider than the screen (mobile.css): start each car centred on its nodes
+  const pan = $('.t-pan');
+  if (pan.dataset.car !== id) { pan.dataset.car = id; pan.scrollLeft = (pan.scrollWidth - pan.clientWidth) / 2; pan.scrollTop = pan.scrollHeight * 0.52 - pan.clientHeight / 2; }
   mount($('#tSlot'), [S1], 0.4);
   S1.set(id, rec.look);
   $('#tSvg').innerHTML = treeSVG(id, rec);
@@ -1121,6 +1126,7 @@ function renderSettings() {
   $('#setName').value = save.name;
   $('#setSound').checked = save.sound !== false;
   $$('#setQuality button').forEach(b => b.classList.toggle('on', b.dataset.q === save.quality));
+  mountTouchSettings($('#setQuality').closest('.srow'), toast);   // 操作設定 (touch devices only)
   $('#setStats').innerHTML = `<span>レース<b>${save.stats.races}</b></span><span>優勝<b>${save.stats.wins}</b></span><span>コレクション<b>${owned().length}/${CARS.length}</b></span>`;
 }
 function setName(v) {
@@ -1306,7 +1312,10 @@ svg.addEventListener('keydown', e => {
   if (g && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); clickNode(g.dataset.node); }
 });
 svg.addEventListener('pointerover', e => { const g = e.target.closest('.nd'); if (g) showTip(g); });
-svg.addEventListener('pointerout', e => { const g = e.target.closest('.nd'); if (g && !g.contains(e.relatedTarget)) hideTip(); });
+svg.addEventListener('pointerout', e => { const g = e.target.closest('.nd'); if (g && !g.contains(e.relatedTarget) && e.pointerType !== 'touch') hideTip(); });
+// touch has no hover: a tapped node keeps its tip (locked / unlocked nodes have no dialog) until the next tap or a scroll
+addEventListener('pointerdown', e => { if (e.pointerType === 'touch' && !e.target.closest?.('#tSvg .nd')) hideTip(); }, true);
+addEventListener('scroll', hideTip, { capture: true, passive: true });
 svg.addEventListener('focusin', e => { const g = e.target.closest('.nd'); if (g) showTip(g); });
 svg.addEventListener('focusout', hideTip);
 
@@ -1368,6 +1377,45 @@ addEventListener('keydown', e => {
   if (modalClose || a?.tagName === 'INPUT' || a?.tagName === 'BUTTON') return;
   if ((e.code === 'Enter' || e.code === 'NumpadEnter') && PREP[cur] && !$('#btnStart').disabled) { e.preventDefault(); startMode(cur); }
 });
+
+/* ================= back: Android back button / edge swipe, browser back ================= */
+// Screens have no URLs, so back used to leave the page: the installed app closed (a left thumb steering from the screen
+// edge is Android's back gesture) and an online room lost the player. One history entry stands for "in the app": back
+// consumes it and does what Esc does (race: the quit prompt; results: back to the screen the race started from; menus:
+// close the dialog / previous screen; home: a note, so a second back leaves). The next tap or key puts it back, never
+// popstate itself: Chrome and Safari skip entries a page pushes without a user activation.
+if (history.state?.ngp) history.replaceState(null, '');   // reloaded on our entry: the one before it is the old document
+const guard = () => { if (!history.state?.ngp && navigator.userActivation?.isActive !== false) history.pushState({ ngp: 1 }, ''); };
+for (const ev of ['pointerup', 'click', 'keydown']) addEventListener(ev, guard, true);
+addEventListener('popstate', () => {
+  if (race) race.done ? endRace() : raceBack();
+  else if (!$('#gfx').classList.contains('hidden')) fx.anim ? fxSkip() : $('#gOk').click();
+  else if (modalClose) modalClose();
+  else if (cur !== 'home') goBack();
+  else toast('もう一度「戻る」で終了します');
+});
+
+/* ================= phones: on-screen keyboard ================= */
+// The keyboard shrinks only the visual viewport (iOS Safari, and Android Chrome by default): lift the focused text field
+// above it, with the keyboard's height as extra bottom padding so its scroller can go that far.
+if (window.visualViewport) {
+  const vv = visualViewport;
+  let padded = null;
+  const fit = () => {
+    const el = document.activeElement;
+    const box = el?.matches?.('input:not([type=checkbox]):not([type=color]), textarea') ? el.closest('main, .overlay') : null;
+    const kb = Math.max(0, innerHeight - vv.height - vv.offsetTop);
+    if (padded && (padded !== box || kb < 60)) { padded.style.paddingBottom = ''; padded = null; }
+    if (!box) { if (scrollY) scrollTo(0, 0); return; }   // iOS can leave the page shifted after the keyboard closes
+    if (kb >= 60) { box.style.paddingBottom = `${kb + 24}px`; padded = box; }
+    const r = el.getBoundingClientRect(), top = Math.max(vv.offsetTop, box.getBoundingClientRect().top) + 8, bottom = vv.offsetTop + vv.height - 12;
+    if (r.bottom > bottom) box.scrollTop += r.bottom - bottom;
+    else if (r.top < top) box.scrollTop -= top - r.top;
+  };
+  vv.addEventListener('resize', fit);
+  addEventListener('focusin', () => setTimeout(fit, 50));
+  addEventListener('focusout', () => setTimeout(fit, 50));
+}
 
 /* ================= auto-update ================= */
 // build.json (uncached) names the deployed build, version.js the one this tab runs. GitHub Pages lets browsers cache

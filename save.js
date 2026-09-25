@@ -45,10 +45,11 @@ export function getSave() {
   if (!data || data.v !== 1) data = fresh();
   // Records of cars this build doesn't know stay in the save: a newer build in another tab may have added them, and
   // deleting them here would make this tab's next persist() erase them. The UI only ever lists CARS (owned()).
-  const known = () => Object.keys(data.cars).filter(id => CAR_BY_ID[id]);
+  // own keys only: 'constructor' etc. (a crafted transfer code) must not pass as a car
+  const known = () => Object.keys(data.cars).filter(id => Object.hasOwn(CAR_BY_ID, id));
   if (!known().length) data.cars[STARTER_CAR] = newCarRec(STARTER_CAR);
   for (const id of known()) migrateRec(data.cars[id]);
-  for (const p of ['p1', 'p2']) if (!CAR_BY_ID[data.selected[p]] || !data.cars[data.selected[p]]) data.selected[p] = known()[0];
+  for (const p of ['p1', 'p2']) if (!Object.hasOwn(CAR_BY_ID, String(data.selected[p])) || !Object.hasOwn(data.cars, String(data.selected[p]))) data.selected[p] = known()[0];
   if (!Object.hasOwn(TRACK_BY_ID, String(data.lastTrack))) data.lastTrack = DEFAULT_TRACK;
   if (!Object.hasOwn(DIFFICULTY_BY_ID, String(data.lastCpuLevel))) data.lastCpuLevel = 'normal';
   if (!['auto', 'high', 'medium', 'low'].includes(data.quality)) data.quality = 'auto';

@@ -4,54 +4,65 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#05070f">
-<link rel="icon" href="data:,">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32" type="image/png">
 <title>ネオン・グランプリ</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=M+PLUS+1p:wght@400;700;800&family=Orbitron:wght@500;700;900&display=swap">
+<script>
+// No import maps (iOS < 16.4, old Chrome): no module would load and the menus would sit there dead. Plain ES5 on purpose.
+if (!(window.HTMLScriptElement && HTMLScriptElement.supports && HTMLScriptElement.supports('importmap'))) document.addEventListener('DOMContentLoaded', function () {
+  var d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:999;display:flex;align-items:center;justify-content:center;padding:24px;background:#05070f;color:#fff;text-align:center;font:700 16px/1.7 system-ui,sans-serif';
+  d.innerHTML = '<p>このブラウザでは遊べません<br><span style="font-weight:400;color:#aab">iPhone・iPad は iOS 16.4 以降に、Android は Chrome を最新版にアップデートしてね</span></p>';
+  document.body.appendChild(d);
+});
+</script>
 <script type="importmap">
 {
   "imports": {
     "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
     "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/",
-    "./abilities.js": "./abilities.js?v=20260924205803",
-    "./carmodel.js": "./carmodel.js?v=20260924205803",
-    "./data.js": "./data.js?v=20260924205803",
-    "./firebase-config.js": "./firebase-config.js?v=20260924205803",
-    "./game.js": "./game.js?v=20260924205803",
-    "./ghost.js": "./ghost.js?v=20260924205803",
-    "./lb.js": "./lb.js?v=20260924205803",
-    "./net.js": "./net.js?v=20260924205803",
-    "./netpredict.js": "./netpredict.js?v=20260924205803",
-    "./p2p.js": "./p2p.js?v=20260924205803",
-    "./save.js": "./save.js?v=20260924205803",
-    "./scenery/albertpark.js": "./scenery/albertpark.js?v=20260924205803",
-    "./scenery/bahrain.js": "./scenery/bahrain.js?v=20260924205803",
-    "./scenery/catalunya.js": "./scenery/catalunya.js?v=20260924205803",
-    "./scenery/hockenheim.js": "./scenery/hockenheim.js?v=20260924205803",
-    "./scenery/hungaroring.js": "./scenery/hungaroring.js?v=20260924205803",
-    "./scenery/interlagos.js": "./scenery/interlagos.js?v=20260924205803",
-    "./scenery/istanbul.js": "./scenery/istanbul.js?v=20260924205803",
-    "./scenery/marinabay.js": "./scenery/marinabay.js?v=20260924205803",
-    "./scenery/monaco.js": "./scenery/monaco.js?v=20260924205803",
-    "./scenery/montreal.js": "./scenery/montreal.js?v=20260924205803",
-    "./scenery/monza.js": "./scenery/monza.js?v=20260924205803",
-    "./scenery/nring.js": "./scenery/nring.js?v=20260924205803",
-    "./scenery/sepang.js": "./scenery/sepang.js?v=20260924205803",
-    "./scenery/shanghai.js": "./scenery/shanghai.js?v=20260924205803",
-    "./scenery/silverstone.js": "./scenery/silverstone.js?v=20260924205803",
-    "./scenery/spa.js": "./scenery/spa.js?v=20260924205803",
-    "./scenery/suzuka.js": "./scenery/suzuka.js?v=20260924205803",
-    "./scenery/yasmarina.js": "./scenery/yasmarina.js?v=20260924205803",
-    "./theme-beach.js": "./theme-beach.js?v=20260924205803",
-    "./theme-city.js": "./theme-city.js?v=20260924205803",
-    "./theme-desert.js": "./theme-desert.js?v=20260924205803",
-    "./theme-snow.js": "./theme-snow.js?v=20260924205803",
-    "./tokyo-dimension.js": "./tokyo-dimension.js?v=20260924205803",
-    "./tracks.js": "./tracks.js?v=20260924205803",
-    "./ui.js": "./ui.js?v=20260924205803",
-    "./version.js": "./version.js?v=20260924205803",
-    "./world.js": "./world.js?v=20260924205803"
+    "./abilities.js": "./abilities.js?v=20260925034457",
+    "./carmodel.js": "./carmodel.js?v=20260925034457",
+    "./data.js": "./data.js?v=20260925034457",
+    "./firebase-config.js": "./firebase-config.js?v=20260925034457",
+    "./game.js": "./game.js?v=20260925034457",
+    "./ghost.js": "./ghost.js?v=20260925034457",
+    "./lb.js": "./lb.js?v=20260925034457",
+    "./net.js": "./net.js?v=20260925034457",
+    "./netpredict.js": "./netpredict.js?v=20260925034457",
+    "./p2p.js": "./p2p.js?v=20260925034457",
+    "./pwa.js": "./pwa.js?v=20260925034457",
+    "./save.js": "./save.js?v=20260925034457",
+    "./scenery/albertpark.js": "./scenery/albertpark.js?v=20260925034457",
+    "./scenery/bahrain.js": "./scenery/bahrain.js?v=20260925034457",
+    "./scenery/catalunya.js": "./scenery/catalunya.js?v=20260925034457",
+    "./scenery/hockenheim.js": "./scenery/hockenheim.js?v=20260925034457",
+    "./scenery/hungaroring.js": "./scenery/hungaroring.js?v=20260925034457",
+    "./scenery/interlagos.js": "./scenery/interlagos.js?v=20260925034457",
+    "./scenery/istanbul.js": "./scenery/istanbul.js?v=20260925034457",
+    "./scenery/marinabay.js": "./scenery/marinabay.js?v=20260925034457",
+    "./scenery/monaco.js": "./scenery/monaco.js?v=20260925034457",
+    "./scenery/montreal.js": "./scenery/montreal.js?v=20260925034457",
+    "./scenery/monza.js": "./scenery/monza.js?v=20260925034457",
+    "./scenery/nring.js": "./scenery/nring.js?v=20260925034457",
+    "./scenery/sepang.js": "./scenery/sepang.js?v=20260925034457",
+    "./scenery/shanghai.js": "./scenery/shanghai.js?v=20260925034457",
+    "./scenery/silverstone.js": "./scenery/silverstone.js?v=20260925034457",
+    "./scenery/spa.js": "./scenery/spa.js?v=20260925034457",
+    "./scenery/suzuka.js": "./scenery/suzuka.js?v=20260925034457",
+    "./scenery/yasmarina.js": "./scenery/yasmarina.js?v=20260925034457",
+    "./theme-beach.js": "./theme-beach.js?v=20260925034457",
+    "./theme-city.js": "./theme-city.js?v=20260925034457",
+    "./theme-desert.js": "./theme-desert.js?v=20260925034457",
+    "./theme-snow.js": "./theme-snow.js?v=20260925034457",
+    "./tokyo-dimension.js": "./tokyo-dimension.js?v=20260925034457",
+    "./touch.js": "./touch.js?v=20260925034457",
+    "./tracks.js": "./tracks.js?v=20260925034457",
+    "./ui.js": "./ui.js?v=20260925034457",
+    "./version.js": "./version.js?v=20260925034457",
+    "./world.js": "./world.js?v=20260925034457"
   }
 }
 </script>
@@ -675,6 +686,49 @@ body.racing #newVer{display:none}
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
 }
 </style>
+<!-- ===== PWA (pwa.js / sw.js / manifest.webmanifest / icons/): app install, offline, data transfer ===== -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ネオンGP">
+<style>
+.pwa-set{display:grid;gap:10px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.pwa-set h3{font-size:15px;color:var(--cyan)}
+.pwa-inst{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px}
+.pwa-inst p{flex:1 1 220px;margin:0;font-size:13px;color:var(--dim)}
+.pwa-inst p b{display:block;font-size:15px;color:var(--text)}
+.pwa-inst .inp{flex:1 1 200px;padding:8px 10px}
+.pwa-inst a.btn{text-decoration:none}
+.pwa-ios{display:flex;align-items:center;gap:8px}
+.pwa-ios span{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:10px;background:rgba(255,255,255,.07);border:1px solid var(--line2);font-size:12px;font-weight:800;white-space:nowrap}
+.pwa-ios span:first-child{border-color:var(--cyan);box-shadow:0 0 12px -2px var(--cyan)}
+.pwa-ios svg{width:20px;height:20px;fill:none;stroke:var(--cyan);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.pwa-ios i{font-style:normal;color:var(--dim)}
+.pwa-xf{display:flex;flex-wrap:wrap;gap:8px}
+.pwa-code{min-height:64px;resize:vertical;font:400 16px/1.35 ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+.pwa-msg{min-height:1.2em;font-size:13px;color:var(--dim)}
+.pwa-msg.err{color:var(--red);font-weight:700}
+.pwa-ask{display:grid;gap:10px;padding:12px 14px;border-radius:12px;border:1px solid rgba(255,77,109,.5);background:rgba(255,77,109,.08)}
+.pwa-ask p{margin:0;font-size:13px}
+.pwa-cmp{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:13px}
+.pwa-cmp span{color:var(--dim)}
+.pwa-acts{display:flex;justify-content:flex-end;gap:8px}
+.pwa-card{position:fixed;z-index:50;left:max(12px,env(safe-area-inset-left));bottom:max(12px,env(safe-area-inset-bottom));width:min(480px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;padding:12px 44px 12px 14px;background:linear-gradient(180deg,#161d44,#0b1027);animation:resIn .45s cubic-bezier(.2,1.2,.4,1)}
+.pwa-card .pwa-inst p{font-size:12.5px;line-height:1.5}
+.pwa-x{position:absolute;top:6px;right:6px;width:32px;height:32px;border:0;border-radius:9px;background:rgba(255,255,255,.07);color:var(--dim);font-size:18px;line-height:1;cursor:pointer}
+#menu:has(#scr-home:not(.active)) .pwa-card{display:none}
+#menu:has(>.pwa-card) #scr-home{padding-bottom:var(--pwa-h,0px)}   /* home scrolls far enough to lift its last row above the card */
+html.ngp-offline #scr-online.active::before,html.ngp-offline #scr-lb.active::before{display:block;margin:0 auto 14px;max-width:760px;padding:12px 16px;border-radius:14px;border:1px solid var(--gold);background:rgba(255,201,77,.1);color:#ffe6a8;font-weight:700;font-size:14px}
+html.ngp-offline #scr-online::before{content:"オフラインです。オンライン対戦は電波のあるところで遊んでね（ソロ・タイムアタック・ガレージ・ガチャはオフラインでも遊べます）"}
+html.ngp-offline #scr-lb::before{content:"オフラインです。ランキングは電波のあるところで見られます（タイムアタックの記録は次にオンラインになったとき送られます）"}
+html.ngp-offline #btnHost,html.ngp-offline #btnJoin{opacity:.38;pointer-events:none}
+</style>
+<script type="module">import './pwa.js';</script>
+<!-- ===== /PWA ===== -->
+<!-- phones / tablets: landscape-first layouts, tap targets, safe areas (after every other style) -->
+<link rel="stylesheet" href="mobile.css?v=20260925034457">
 </head>
 <body>
 <div id="menu">
@@ -824,10 +878,10 @@ body.racing #newVer{display:none}
       <div class="tree">
         <div class="panel t-main">
           <div class="t-cars" id="tCars"></div>
-          <div class="t-wrap">
+          <div class="t-pan"><div class="t-wrap">
             <div class="t-center"><div class="stage" id="tSlot"></div></div>
             <svg id="tSvg" viewBox="-560 -565 1120 870" aria-label="スキルツリー"></svg>
-          </div>
+          </div></div>
         </div>
         <div class="panel t-side" id="tSide"></div>
       </div>
@@ -857,6 +911,18 @@ body.racing #newVer{display:none}
         <div class="srow"><span>効果音</span><input type="checkbox" class="toggle" id="setSound" aria-label="効果音"></div>
         <div class="srow"><span>画質<small class="hint">カクつく・重いときは「低」。自動は動きの重さを見て切り替えます</small></span><div class="seg" id="setQuality" role="group" aria-label="画質"><button data-q="auto">自動</button><button data-q="high">高</button><button data-q="medium">中</button><button data-q="low">低</button></div></div>
         <div class="field">記録<div class="stats3" id="setStats"></div></div>
+        <!-- ===== PWA (pwa.js): アプリとして追加 + データ引き継ぎ ===== -->
+        <div class="pwa-set">
+          <h3>アプリ</h3>
+          <div class="pwa-inst" id="pwaInstall"></div>
+          <h3>データ引き継ぎ</h3>
+          <p class="hint">コイン・チケット・車・スキル・記録を、別のブラウザやホーム画面のアプリに移せます（ゴーストは移りません）。コードをメモなどに保存しておけば、データが消えたときの備えにもなります。</p>
+          <div class="pwa-xf"><button class="btn sm" id="xfCopy">コードをコピー</button><button class="btn sm" id="xfPaste">コードを貼り付け</button></div>
+          <textarea class="inp pwa-code" id="xfCode" rows="2" placeholder="引き継ぎコード" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="引き継ぎコード"></textarea>
+          <div class="pwa-msg" id="xfMsg" role="status"></div>
+          <div class="pwa-ask" id="xfAsk" hidden></div>
+        </div>
+        <!-- ===== /PWA ===== -->
         <div class="danger-zone">
           <h3>データのリセット</h3>
           <p>コイン・チケット・車・スキル・ベストタイム・ゴーストがすべて初期状態に戻ります。元に戻せません。</p>

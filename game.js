@@ -7,6 +7,7 @@ import { buildWorld } from './world.js';
 import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities, robotKnock, faceWall, netAway, cpuAbility } from './abilities.js';
 import { createRecorder, createGhostPlayer } from './ghost.js';
 import { netSample, ageOf, predict, newOffset, applyOffset, retarget, decay } from './netpredict.js';
+import { createTouch, keepAwake, isPhone } from './touch.js';
 
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -48,7 +49,7 @@ const LEVELS = ['low', 'medium', 'high'], LEVEL_JA = { high: '高', medium: '中
 // 'auto' steps on a ladder: 0 = 'low' at pixel ratio 0.7, 1 = low, 2 = medium, 3 = high. Page session: the level the
 // previous race settled at, the lowest step still worth going to, the highest step that held.
 let autoLevel = null, autoMin = 0, autoMax = 3;
-const guessLevel = () => ((navigator.hardwareConcurrency || 4) >= 8 && !matchMedia('(pointer: coarse)').matches ? 'high' : 'medium');
+const guessLevel = () => (isPhone() ? 'low' : (navigator.hardwareConcurrency || 4) >= 8 && !matchMedia('(pointer: coarse)').matches ? 'high' : 'medium');
 
 let R = null;   // active race context
 
@@ -166,6 +167,9 @@ async function setup(ctx, root, opts, mode) {
     ? 'P1: WASD + L-Shift　P2: 矢印 + R-Shift　Esc: 終了　M: 音'
     : 'WASD/矢印: 運転　Space: 能力　R: コースに戻る　Esc: 終了　M: 音');
   ctx.timers.push(setTimeout(() => hint.classList.add('off'), 7000));
+  // touch controls: single-view races only (split screen stays a keyboard mode)
+  if (ctx.views.length === 1) ctx.touch = createTouch({ wrap, audio: ctx.audio, pause: () => { if (!ctx.finalized && !ctx.quitOpen) openQuit(ctx); } });
+  ctx.wakeOff = keepAwake();
 
   listen(ctx, window, 'keydown', e => onKey(ctx, e, true));
   listen(ctx, window, 'keyup', e => onKey(ctx, e, false));
@@ -219,6 +223,7 @@ export function stopRace() {
   cancelAnimationFrame(ctx.raf);
   ctx.timers.forEach(clearTimeout);
   for (const [t, ev, fn] of ctx.listeners) t.removeEventListener(ev, fn);
+  try { ctx.touch?.destroy(); ctx.wakeOff?.(); } catch (e) { console.warn(e); }
   for (const off of ctx.offs) { try { off(); } catch { /* ignore */ } }
   try { if (ctx.race) clearAbilities(ctx.race); } catch (e) { console.warn(e); }
   try { ctx.audio?.close(); } catch { /* ignore */ }
@@ -643,7 +648,8 @@ function makeAudio() {
       s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t + 0.35);
     },
     toggle() { this.muted = !this.muted; master.gain.value = this.muted ? 0 : 0.4; return this.muted; },
-    resume() { if (ac.state === 'suspended') ac.resume().catch(() => {}); },
+    // iOS Safari: 'interrupted' after a call / app switch / Siri, which needs resume() just like 'suspended'
+    resume() { if (ac.state !== 'running' && ac.state !== 'closed') ac.resume().catch(() => {}); },
     close() { ac.close().catch(() => {}); },
   };
 }
@@ -840,6 +846,7 @@ function listen(ctx, target, ev, fn) { target.addEventListener(ev, fn); ctx.list
 function onKey(ctx, e, down) {
   if (R !== ctx) return;
   if (!down) { ctx.keys.delete(e.code); return; }
+  ctx.touch?.hide();   // a keyboard is in use: touch controls come back on the next touch
   if (ctx.finalized) return;   // results screen belongs to the UI now
   ctx.audio?.resume();
   if (e.code === 'Escape') { e.preventDefault(); if (!e.repeat) ctx.quitOpen ? closeQuit(ctx) : openQuit(ctx); return; }
@@ -867,6 +874,11 @@ function closeQuit(ctx) {
   ctx.paused = false;
   ctx.last = performance.now();
   ctx.modal.classList.remove('on');
+}
+// Android back / edge swipe (ui.js popstate): what Esc does, so a stray swipe while steering only opens the prompt
+export function raceBack() {
+  const ctx = R;
+  if (ctx && !ctx.finalized) ctx.quitOpen ? closeQuit(ctx) : openQuit(ctx);
 }
 function confirmQuit(ctx) {
   const onQuit = ctx.opts.onQuit;
@@ -1242,7 +1254,10 @@ function impact(ctx, x, y, z, strength, cars) {
   }
   let local = false;
   for (const car of cars) { const v = ctx.viewByCar.get(car); if (v) { v.shake = Math.max(v.shake, Math.min(0.45, strength * 0.03)); local = true; } }
-  if (local && (ctx.lastHit || 0) + 0.12 < ctx.clock) { ctx.lastHit = ctx.clock; ctx.audio?.hit(strength * 0.04); }
+  if (local && (ctx.lastHit || 0) + 0.12 < ctx.clock) {
+    ctx.lastHit = ctx.clock; ctx.audio?.hit(strength * 0.04);
+    if (strength > 6) ctx.touch?.buzz(Math.min(70, 15 + strength * 3));   // haptics (Android; iOS has none)
+  }
 }
 
 // ======================================================================================
@@ -1499,7 +1514,7 @@ function update(ctx, dt) {
     if (car.control === 'net') continue;
     const v = ctx.viewByCar.get(car);
     if (v && !car.finished) {
-      const reset = readKeys(ctx, v.keys, inp);
+      const reset = readKeys(ctx, v.keys, inp) | !!ctx.touch?.read(inp, race.state);   // touch merges into the keys
       if (reset && race.state === 'running' && Math.abs(car.speed) < 30) respawn(ctx, car);
     } else if (!car._.away) aiInput(ctx, car, dt);
     if (race.state !== 'running') inp.ability = false;
@@ -1511,7 +1526,7 @@ function update(ctx, dt) {
   for (const car of cars) Object.assign(car.mods, MODS0);
   if (race.state !== 'countdown') updateAbilities(race, dt);
   if (race.state === 'running') {
-    for (const car of cars) if (car.input.ability && car.control !== 'net' && !car.finished) tryActivate(race, car);
+    for (const car of cars) if (car.input.ability && car.control !== 'net' && !car.finished && tryActivate(race, car) && car.control === 'p1') ctx.touch?.buzz(35);
   }
 
   // per-frame modifiers: slipstream, rubber band, timers
@@ -1673,6 +1688,7 @@ function updateViews(ctx, dt) {
     let targetH = car.heading;
     if (spd > 4 && car.speed > 0) targetH = car.heading + wrapAngle(Math.atan2(car.vel.x, car.vel.z) - car.heading) * 0.55;
     let dist = 7.4 + Math.min(spd, 80) * 0.028, height = 2.7 + Math.min(spd, 80) * 0.006;
+    if (cam.aspect < 0.8) height += 1.3;   // portrait: look down a little more, the tall view shows more road than sky
     if (race.state === 'countdown') { const k = smooth(0, 3.9, ctx.count); targetH += k * 2.6; dist += k * 5; height += k * 2.5; }
     if (v.camPos.distanceToSquared(car.pos) > 1600) v.camH = targetH;   // teleported: the cut below also faces the way it goes
     v.camH += wrapAngle(targetH - v.camH) * damp(race.state === 'countdown' ? 4 : 6, dt);
@@ -1689,7 +1705,9 @@ function updateViews(ctx, dt) {
     const fov = 62 + Math.min(spd, 85) / 85 * 16 + (boosting ? 8 : 0);
     v.fov += (fov - v.fov) * damp(4, dt);
     // fov is tuned for 16:9; wider viewports (split screen halves) keep that horizontal fov instead of a fisheye
-    const f = cam.aspect > 1.78 ? 2 * Math.atan(Math.tan(v.fov * Math.PI / 360) * 1.78 / cam.aspect) * 180 / Math.PI : v.fov;
+    // portrait (phones): widen the vertical fov so the road ahead stays in view (horizontal fov of a 0.8 aspect)
+    const f = cam.aspect > 1.78 ? 2 * Math.atan(Math.tan(v.fov * Math.PI / 360) * 1.78 / cam.aspect) * 180 / Math.PI
+      : cam.aspect < 0.8 ? 2 * Math.atan(Math.tan(v.fov * Math.PI / 360) * 0.8 / cam.aspect) * 180 / Math.PI : v.fov;
     if (Math.abs(cam.fov - f) > 0.01) { cam.fov = f; cam.updateProjectionMatrix(); }
 
     if (v.engine) {
@@ -1701,6 +1719,7 @@ function updateViews(ctx, dt) {
     }
     updateHud(ctx, v);
   }
+  ctx.touch?.hud(ctx.views[0].car);
 }
 
 function resize(ctx) {

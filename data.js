@@ -111,6 +111,7 @@ export function computeStats(carId, unlocked = []) {
   const s = { ...car.base, gaugeRate: 1, abilityDuration: 1, abilityPower: 1, slipstream: false, driftCharge: false };
   const mul = { top: 1, accel: 1, grip: 1, steer: 1 };
   for (const id of unlocked) {
+    if (!Object.hasOwn(NODE_BY_ID, id)) continue;   // a newer build's node (kept in the save) or a crafted transfer code
     for (const [k, v] of Object.entries(NODE_BY_ID[id].mod)) {
       if (typeof v === 'boolean') s[k] = v;
       else if (k in mul) mul[k] += v;
