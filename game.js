@@ -964,7 +964,7 @@ function aiInput(ctx, car, dt) {
   if (corner && !(c.passT > 0)) c.laneTarget = 0;
   let follow = Infinity, picked = false;
   for (const o of race.cars) {
-    if (o === car || o._.left) continue;
+    if (o === car || o._.left || o._.away) continue;   // away: diving (tokyodive), parked or hidden, not on this road
     const dx = o.pos.x - car.pos.x, dz = o.pos.z - car.pos.z, along = dx * fx + dz * fz, lat = -dx * fz + dz * fx;
     // passing: hold the pass line until PASS.clear m ahead of it (merging back sooner would hit it); into a corner only
     // once alongside, else it drops back in behind

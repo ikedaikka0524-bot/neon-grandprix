@@ -1233,6 +1233,7 @@ $('#diffSeg').onclick = e => {
   save.lastCpuLevel = b.dataset.lv;
   persist();
   renderPrep('solo');
+  $(`#diffSeg [data-lv="${save.lastCpuLevel}"]`).focus();   // the chips were rebuilt: keep keyboard focus on the picked one
 };
 
 // online
