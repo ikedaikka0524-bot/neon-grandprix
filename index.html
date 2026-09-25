@@ -250,6 +250,22 @@ canvas.pv:active{cursor:grabbing}
 .seg{display:flex;padding:4px;border-radius:12px;background:rgba(0,0,0,.3);border:1px solid var(--line)}
 .seg button{min-width:50px;padding:8px 12px;border:0;border-radius:9px;background:none;font:900 16px var(--num);color:var(--dim);cursor:pointer}
 .seg button.on{background:linear-gradient(100deg,#00c8ff,#7b5cff);color:#fff;box-shadow:0 0 16px -2px rgba(34,230,255,.6)}
+/* CPU difficulty (solo) */
+.diff{display:grid;gap:8px}
+.diff-h{display:flex;align-items:baseline;justify-content:space-between;gap:4px 10px;flex-wrap:wrap;font-weight:700}
+.diff-h small{font-size:11.5px;font-weight:400;color:var(--dim)}
+.diffs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;container-type:inline-size}
+.dchip{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0;padding:8px 0 7px;border-radius:11px;border:1px solid var(--line);background:rgba(0,0,0,.3);color:var(--dim);cursor:pointer;transition:.15s}
+/* the label shrinks to fit its chip: やさしい (4 glyphs) needs 4 x the size, a chip is (row - 26px) / 5 inside */
+.dchip b{max-width:100%;font:800 13px/1.15 var(--font);font-size:min(13px,calc((100cqi - 30px) / 20));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dchip small{display:flex;align-items:center;gap:3px;font:700 10.5px var(--num);white-space:nowrap;color:var(--gold);opacity:.85}
+.dchip small .ic-coin{width:10px;height:10px}
+.dchip:hover{border-color:var(--line2);color:var(--text)}
+.dchip.on{background:linear-gradient(100deg,#00c8ff,#7b5cff);border-color:transparent;color:#fff;box-shadow:0 0 16px -2px rgba(34,230,255,.6)}
+.dchip.on small{color:#fff3b0;opacity:1}
+.dchip.legend{border-color:rgba(255,201,77,.6);color:var(--gold);background:linear-gradient(160deg,rgba(255,201,77,.18),rgba(255,43,214,.1));text-shadow:0 0 8px rgba(255,201,77,.5)}
+.dchip.legend.on{background:linear-gradient(100deg,#ffb300,#ff5a1f 55%,#ff2bd6);color:#fff;box-shadow:0 0 22px -2px rgba(255,179,0,.85)}
+.lg-badge{justify-self:center;display:inline-flex;align-items:center;gap:6px;margin-top:4px;padding:3px 12px;border-radius:999px;font:900 12px var(--font);letter-spacing:.2em;color:#1a1000;background:linear-gradient(90deg,#ffb300,#fff3b0,#ffb300);background-size:200% 100%;animation:shim 2.5s linear infinite;box-shadow:0 0 18px rgba(255,201,77,.7)}
 .records{display:grid;gap:6px}
 .rec-h{font-size:12px;font-weight:800;color:var(--cyan)}
 .rec{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;font-size:13px;color:var(--dim)}
@@ -727,6 +743,7 @@ body.racing #newVer{display:none}
           <span class="mode-tag" id="prepTag"></span>
           <div><h2 id="prepTitle"></h2><p class="lead" id="prepLead"></p></div>
           <div class="opt only-solo"><span>CPUの数</span><div class="seg" id="cpuSeg"><button data-n="1">1</button><button data-n="2">2</button><button data-n="3">3</button></div></div>
+          <div class="diff only-solo"><div class="diff-h"><span>CPUの強さ</span><small id="diffDesc"></small></div><div class="diffs" id="diffSeg" role="group" aria-label="CPUの強さ"></div></div>
           <div class="only-ghost" id="ghostBox"></div>
           <div class="records" id="prepRec"></div>
           <div class="keyhint" id="prepKeys"></div>

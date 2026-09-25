@@ -1380,6 +1380,51 @@ function faceWanted(race, car) {
   });
 }
 
+// CPU tactics (difficulty 'hard' and up): game.js asks while a CPU's gauge is full and fires on a truthy answer, the reason
+// (kept in car._.abilWhy for logs). road = { straight: flat-out m ahead, corner: m to the next lift, room: m it can go at
+// this speed before it has to brake }. Anything without a rule here (new abilities) goes on a straight.
+export function cpuAbility(race, car, road) {
+  const id = car.ability.id, rivals = race.cars.filter(c => c !== car && !c.finished && !c._?.left);
+  const gap = c => magnetGap(race, car, c);   // m along the track, + = ahead
+  const near = r => rivals.filter(c => car.pos.distanceTo(c.pos) < r);
+  if (car.spin > 0) return id === 'robotdash' && 'spin';   // the robot shakes a spin off; anything else would be wasted
+  switch (id) {
+    case 'boost': return road.straight > 80 && 'straight';
+    case 'nitro': return road.straight > 140 && 'straight';
+    case 'downforce': return road.corner > 10 && road.corner < 70 && 'corner';
+    case 'thunderbolt': {   // not leading, and the leader close enough to pass while it spins
+      const t = thunderTarget(race, car), g = t ? gap(t) : 0;
+      return g > 0 && g < 120 && !t.mods?.invulnerable && `target ${Math.round(g)}m`;
+    }
+    case 'magnet': case 'hellchain': {   // the car it would pick: the nearest one ahead
+      const t = id === 'magnet' ? magnetTarget(race, car) : magnetTarget(race, car, HELL.snap, HELL.range), g = t ? gap(t) : 0;
+      return g >= (id === 'magnet' ? 30 : 20) && g <= 150 && !chainProof(t) && (id === 'magnet' || road.straight > 60) && `target ${Math.round(g)}m`;
+    }
+    case 'domain': { const n = near(35).filter(c => !c.mods?.invulnerable).length; return n > 0 && `${n} in range`; }
+    case 'oil': {   // a car 5-30 m behind, about in line (the slick lands 4 m behind, 3 m wide)
+      const s = race.track.samples[car.trackIndex];
+      return rivals.some(c => -gap(c) > 5 && -gap(c) < 30 && Math.abs((c.pos.x - car.pos.x) * s.right.x + (c.pos.z - car.pos.z) * s.right.z) < 3.5) && 'behind';
+    }
+    case 'shield': {
+      if (rivals.some(c => c.ability?.chained && c.ability.target === car)) return 'chained';
+      const armed = (c, k) => c.ability?.id === k && c.ability.gauge >= 1 && !(c.ability.active > 0) && !c.ability.sealed;
+      if (rivals.some(c => armed(c, 'thunderbolt') && thunderTarget(race, c) === car)) return 'thunder armed';
+      if (rivals.some(c => armed(c, 'hellchain') && magnetTarget(race, c, HELL.snap, HELL.range) === car)) return 'chain armed';
+      if ((race.hazards || []).some(h => h.kind === 'domain' && h.on && h.owner !== car && car.pos.distanceTo(h.center) < DOMAIN_R + 15)
+        || rivals.some(c => armed(c, 'domain') && car.pos.distanceTo(c.pos) < DOMAIN_R)) return 'domain';
+      return near(6).length > 0 && 'close';
+    }
+    case 'timeslow': return rivals.some(c => gap(c) > 0 && gap(c) < 60) && 'ahead';
+    case 'phase': return (road.straight > 120 || rivals.some(c => gap(c) > 0 && gap(c) < 20)) && 'through';
+    case 'robotdash': return near(10).length > 0 && 'close';
+    case 'facewall': return faceWanted(race, car) && 'behind';
+    // lands pow m on at the same speed: only with 45 m of straight and of braking room left after the jump (less landed it
+    // in a braking zone too fast, or off the line at the turn-in)
+    case 'warp': return Math.min(road.straight, road.room) > ABILITIES.warp.power * (car.stats?.abilityPower || 1) + 45 && 'straight';
+    default: return road.straight > 80 && 'straight';   // anything new
+  }
+}
+
 // game.js, after car-car collisions (every physics substep): this client's own cars just behind a live wall and inside
 // the shown faces' edges are held FACE.min m behind the row, no faster than the row − FACE.slower, with a bounce on
 // contact. Cars ahead of the owner and shielded / phased / robot cars are free; a warp jumps past.

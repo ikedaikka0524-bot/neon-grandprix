@@ -18,4 +18,12 @@ const r = reloadSave({ key: 'crg.save.v1' });
 assert.equal(r.selected.p1, STARTER_CAR);
 persist();
 assert.deepEqual(JSON.parse(store.get('crg.save.v1')).cars.zz_future, s.cars.zz_future);
+
+// solo CPU difficulty: kept when known, anything else (incl. prototype keys) falls back to 'normal'
+for (const [v, want] of [['oni', 'oni'], ['constructor', 'normal'], [undefined, 'normal'], ['zz', 'normal']]) {
+  const t = JSON.parse(store.get('crg.save.v1'));
+  t.lastCpuLevel = v;
+  store.set('crg.save.v1', JSON.stringify(t));
+  assert.equal(reloadSave({ key: 'crg.save.v1' }).lastCpuLevel, want);
+}
 console.log('save ok');

@@ -1,10 +1,10 @@
 // Race runtime: track, arcade physics, CPU AI, laps, HUD, cameras, split screen, online sync. Scenery: world.js.
 import * as THREE from 'three';
-import { CARS, CAR_BY_ID, ABILITIES, SKILL_TREE, computeStats } from './data.js';
+import { CARS, CAR_BY_ID, ABILITIES, SKILL_TREE, DIFFICULTY_BY_ID, computeStats } from './data.js';
 import { TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
 import { buildCarMesh } from './carmodel.js';
 import { buildWorld } from './world.js';
-import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities, robotKnock, faceWall, netAway } from './abilities.js';
+import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities, robotKnock, faceWall, netAway, cpuAbility } from './abilities.js';
 import { createRecorder, createGhostPlayer } from './ghost.js';
 import { netSample, ageOf, predict, newOffset, applyOffset, retarget, decay } from './netpredict.js';
 
@@ -113,7 +113,10 @@ async function setup(ctx, root, opts, mode) {
   ctx.skids = new Skids(ctx, 2600);
 
   // ---- cars
-  const { list, grid } = buildEntries(opts, mode);
+  // CPU difficulty (solo only: the other modes have no CPUs; finished players' autopilot drives like 'normal')
+  ctx.lv = DIFFICULTY_BY_ID[mode === 'solo' && Object.hasOwn(DIFFICULTY_BY_ID, String(opts.cpuLevel)) ? opts.cpuLevel : 'normal'];
+  if (ctx.lv.corner) track.line = racingLine(track);   // ~0.1 s: behind the loading screen, not in the first frame
+  const { list, grid } = buildEntries(opts, mode, ctx.lv);
   const meshes = await Promise.all(list.map(e => buildCarMesh(e.carId, e.look)));
   if (R !== ctx) return;
   race.cars = list.map((e, i) => makeCar(i, e, meshes[i]));
@@ -244,7 +247,21 @@ export function stopRace() {
 // ======================================================================================
 // Entries / cars
 // ======================================================================================
-function buildEntries(opts, mode) {
+// CPU car by difficulty: a rarity by lv.cars weight, then any car of it; nodes: lv.nodes [min, max] spread over the branches
+function cpuCar(lv) {
+  let r = Math.random() * Object.values(lv.cars).reduce((a, b) => a + b, 0);
+  const rar = Object.keys(lv.cars).find(k => (r -= lv.cars[k]) < 0) || Object.keys(lv.cars)[0];
+  const pool = CARS.filter(c => c.rarity === rar), def = pool[Math.floor(Math.random() * pool.length)];
+  const depth = SKILL_TREE.map(() => 0);
+  for (let n = lv.nodes[0] + Math.floor(Math.random() * (lv.nodes[1] - lv.nodes[0] + 1)); n > 0; n--) {
+    const open = depth.flatMap((d, i) => (d < 4 ? [i] : []));
+    if (!open.length) break;
+    depth[open[Math.floor(Math.random() * open.length)]]++;
+  }
+  return { def, nodes: SKILL_TREE.flatMap((br, i) => br.nodes.slice(0, depth[i]).map(n => n.id)) };
+}
+
+function buildEntries(opts, mode, lv) {
   const players = (opts.players || []).map(p => ({
     ...p,
     look: { body: CAR_BY_ID[p.carId]?.color || '#ffffff', wheel: '#222222', wing: false, ...(p.look || {}) },
@@ -254,13 +271,15 @@ function buildEntries(opts, mode) {
   const names = CPU_NAMES.slice().sort(() => Math.random() - 0.5);
   const cpus = [];
   for (let i = 0; i < (opts.cpuCount ?? 3); i++) {
-    const def = CARS[Math.floor(Math.random() * CARS.length)];
-    const nodes = [];
-    for (const br of SKILL_TREE) {
+    let def = CARS[Math.floor(Math.random() * CARS.length)], nodes = [];
+    if (lv.cars) ({ def, nodes } = cpuCar(lv));
+    else for (const br of SKILL_TREE) {
       let k = Math.floor(Math.random() * 4);
       if (k === 3 && Math.random() < 0.3) k = 4;
       nodes.push(...br.nodes.slice(0, k).map(n => n.id));
     }
+    const stats = computeStats(def.id, nodes);
+    if (lv.edge) { stats.top *= 1 + lv.edge; stats.accel *= 1 + lv.edge; }
     let body = def.color;
     if (players.some(p => p.carId === def.id)) {
       // a hue shift does nothing to white / grey / cream paint: give those a vivid colour instead
@@ -268,7 +287,7 @@ function buildEntries(opts, mode) {
       const c = new THREE.Color(def.color), { r, g, b } = c.getRGB({}, THREE.SRGBColorSpace);
       body = '#' + (1 - Math.min(r, g, b) / Math.max(r, g, b, 1e-6) < 0.25 ? c.setHSL(Math.random(), 0.8, 0.5) : c.offsetHSL(0.5, 0, 0)).getHexString();
     }
-    cpus.push({ name: 'CPU ' + names[i % names.length], carId: def.id, look: { body, wheel: '#222222', wing: Math.random() < 0.3 }, stats: computeStats(def.id, nodes), control: 'cpu' });
+    cpus.push({ name: 'CPU ' + names[i % names.length], carId: def.id, look: { body, wheel: '#222222', wing: Math.random() < 0.3 }, stats, control: 'cpu', pace: lv.pace });
   }
   return { list: [...players, ...cpus], grid: [...cpus, ...players] };  // solo: player starts at the back
 }
@@ -285,10 +304,10 @@ function makeCar(index, e, mesh) {
     mods: { ...MODS0 }, spin: 0, ability: null,
     _: {
       h: 0, s: 0, yaw: 0, steerS: 0, drift: false, driftDir: 0, driftT: 0, turbo: 0, slip: 0, rubber: 1,
-      skill: e.control === 'cpu' ? 0.95 + Math.random() * 0.05 : 1,
+      skill: e.pace ? e.pace[0] + Math.random() * (e.pace[1] - e.pace[0]) : 1,
       t: 0, prevT: null, crossings: 0, halfway: true, lapStart: 0, lastLap: null, pitch: 0, acc: 0, rollS: 0,
       spinVis: 0, spinTot: 0, lastSpin: 0, spinSteer: 0, spinSteerT: 0,
-      lane: 0, laneTarget: 0, laneT: 0, stuck: 0, abilDelay: null, wrong: 0, net: null, off: newOffset(), left: false,
+      lane: 0, laneTarget: 0, laneT: 0, passT: 0, stuck: 0, abilDelay: null, wrong: 0, net: null, off: newOffset(), left: false,
       // an ability's own space (tokyodive): away = out of the race world (progress frozen, no AI); track = the course
       // a driver is on meanwhile; jump = lap fraction it came back ahead by (updateProgress counts what it skipped)
       away: false, track: null, jump: 0,
@@ -867,51 +886,188 @@ function readKeys(ctx, ks, inp) {
 // ======================================================================================
 // CPU AI (also drives local cars after they finish)
 // ======================================================================================
+// Racing line for the difficulty drivers, built once per race in setup: a lateral offset per sample (+ = right),
+// K1999-style (each point moved sideways until the line's curvature there is the mean of its neighbours', coarse to fine
+// spans, kept inside the road), its heading and curvature, and the hairpins a drifting CPU slides through.
+function racingLine(tr) {
+  const { N, samples: S, spacing } = tr, lim = Math.max(0, tr.width / 2 - 2.2), off = new Float32Array(N);
+  const px = i => S[i].pos.x + S[i].right.x * off[i], pz = i => S[i].pos.z + S[i].right.z * off[i];
+  const w = i => ((i % N) + N) % N;
+  const menger = (a, b, c, ob) => {   // curvature of the circle through line points a, b (at offset ob), c
+    const ax = px(a), az = pz(a), cx = px(c), cz = pz(c), bx = S[b].pos.x + S[b].right.x * ob, bz = S[b].pos.z + S[b].right.z * ob;
+    const x1 = bx - ax, z1 = bz - az, x2 = cx - bx, z2 = cz - bz, x3 = cx - ax, z3 = cz - az;
+    return 2 * (x1 * z2 - z1 * x2) / Math.sqrt((x1 * x1 + z1 * z1) * (x2 * x2 + z2 * z2) * (x3 * x3 + z3 * z3) + 1e-9);
+  };
+  for (const span of [40, 20, 10, 5]) {
+    const K = Math.max(1, Math.round(span / spacing));
+    for (let it = 0; it < 80; it++) for (let i = 0; i < N; i++) {
+      const p = w(i - K), n = w(i + K);
+      const target = (menger(w(p - K), p, i, off[p]) + menger(i, n, w(n + K), off[n])) / 2;
+      const k0 = menger(p, i, n, off[i]), slope = (menger(p, i, n, off[i] + 0.1) - k0) / 0.1;
+      if (Math.abs(slope) > 1e-6) off[i] = clamp(off[i] + (target - k0) / slope * 0.8, -lim, lim);
+    }
+  }
+  const head = new Float32Array(N), curv = new Float32Array(N);
+  for (let i = 0; i < N; i++) { const a = (i - 1 + N) % N, b = (i + 1) % N; head[i] = Math.atan2(px(b) - px(a), pz(b) - pz(a)); }
+  for (let i = 0; i < N; i++) {
+    const a = (i - 3 + N) % N, b = (i + 3) % N;
+    curv[i] = wrapAngle(head[b] - head[a]) / Math.max(1e-3, Math.hypot(px(b) - px(a), pz(b) - pz(a)));
+  }
+  // hairpins (drift zones): runs of one direction tighter than PIN.r turning more than PIN.turn; value = direction (+1 left).
+  // None with the barrier under PIN.room m off the road (Monaco): the slide runs a little wide, into it
+  const pin = new Int8Array(N), tight = i => Math.abs(curv[i % N]) > 1 / PIN.r;
+  let s0 = 0;
+  while (s0 < N && tight(s0)) s0++;
+  for (let k = 0; k < N && tr.wall - tr.width / 2 >= PIN.room;) {
+    const i = (s0 + k) % N, dir = Math.sign(curv[i]);
+    let n = 0, turn = 0;
+    while (n < N && tight(i + n) && Math.sign(curv[(i + n) % N]) === dir) turn += Math.abs(curv[(i + n++) % N]) * spacing;
+    if (turn > PIN.turn) for (let m = 0; m < n; m++) pin[(i + m) % N] = dir;
+    k += Math.max(1, n);
+  }
+  return { off, head, curv, pin };
+}
+// drift zone: line radius < r m turning > turn rad; the drift is planned at yaw x the grip steer rate (a drift gives up to 1.4
+// but slides wide: 1.3 put a legend ur_inferno into the Spa barrier); room: m of run-off (barrier past the road edge) a course
+// needs for any
+const PIN = { r: 60, turn: 1.0, yaw: 1.25, room: 3 };
+// difficulty drivers' overtaking: cone = m sideways within which a car ahead caps its speed (follow); gap = m sideways
+// from that car it passes at (over the cone + path wobble; fits a 11 m road: path clamp 3.7 m); clear = m ahead of it
+// before it merges back; stopped = m/s under which a car ahead in a corner is driven around instead of queued behind
+const PASS = { cone: 2.4, gap: 3.2, clear: 6, stopped: 5 };
+
 function aiInput(ctx, car, dt) {
   const race = ctx.race, tr = race.track, S = tr.samples, N = tr.N, W2 = tr.width / 2, c = car._, inp = car.input;
   const spd = Math.max(0, car.speed), idx = car.trackIndex;
   const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
-  c.laneT -= dt;
-  if (c.laneT <= 0) { c.laneTarget = (Math.random() * 2 - 1) * (W2 - 3.5); c.laneT = 2 + Math.random() * 4; }
+  // lv.corner set: the difficulty driver. Unset ('normal', and players' autopilot after the finish): the original one
+  const lv = car.control === 'cpu' ? ctx.lv : null, pro = !!lv?.corner, line = pro ? (tr.line ||= racingLine(tr)) : null;
+  const draft = pro && lv.draft && (car.stats.slipstream || car.stats.passive === 'draft') && c.straight > 100;
+  c.laneT -= dt; c.passT -= dt;
+  if (c.laneT <= 0) { c.laneTarget = (Math.random() * 2 - 1) * (W2 - 3.5) * (pro ? lv.wander : 1); c.laneT = 2 + Math.random() * 4; }
+  // difficulty drivers: back on the line through corners (an offset line is slower / runs wide), overtaking on straights
+  // (in corners only cars that have about stopped); follow: the speed that doesn't run into the car ahead, never below 0
+  // (a negative one would reverse it)
+  const corner = pro && c.straight < 50;
+  if (corner && !(c.passT > 0)) c.laneTarget = 0;
+  let follow = Infinity, picked = false;
   for (const o of race.cars) {
     if (o === car || o._.left) continue;
-    const dx = o.pos.x - car.pos.x, dz = o.pos.z - car.pos.z, along = dx * fx + dz * fz;
-    if (along < 2 || along > 20) continue;
-    const lat = -dx * fz + dz * fx;
+    const dx = o.pos.x - car.pos.x, dz = o.pos.z - car.pos.z, along = dx * fx + dz * fz, lat = -dx * fz + dz * fx;
+    // passing: hold the pass line until PASS.clear m ahead of it (merging back sooner would hit it); into a corner only
+    // once alongside, else it drops back in behind
+    if (c.passT > 0 && along < (corner ? 2 : 20) && along > -PASS.clear && Math.abs(lat) < PASS.gap + 1) c.passT = c.laneT = Math.max(c.laneT, 0.3);
+    if (along < 2 || along > (draft ? 28 : 20)) continue;
+    if (pro && Math.abs(lat) < PASS.cone) follow = Math.min(follow, Math.max(0, o.speed + (along - 6) * 2));
+    if (picked || (corner && o.speed > PASS.stopped)) continue;
+    if (draft && along > 10) {   // on a straight: tuck in behind it for the slipstream, pull out (below) once close
+      if (Math.abs(lat) < 6 && o.speed > 15) { c.laneTarget = clamp(c.lane + 2 * lat, -(W2 - 2), W2 - 2); c.laneT = 0.5; picked = true; }
+      continue;
+    }
     if (Math.abs(lat) < 2.6 && o.speed < car.speed + 3) {
-      c.laneTarget = clamp(c.lane + (lat > 0 ? -4 : 4), -(W2 - 2), W2 - 2);
+      if (pro) {
+        // a path PASS.gap m to the side of it, clear of the follow cone: on our side of it, or the other where the road is
+        // too narrow for that. The path below is line x lv.line + lane / 2
+        const s = S[idx], ol = (o.pos.x - s.pos.x) * s.right.x + (o.pos.z - s.pos.z) * s.right.z, side = lat > 0 ? -1 : 1;
+        const to = Math.abs(ol + side * PASS.gap) <= W2 - 1.8 ? ol + side * PASS.gap : ol - side * PASS.gap;
+        c.laneTarget = 2 * (to - line.off[idx] * lv.line);
+        c.passT = 1.2;
+      } else c.laneTarget = clamp(c.lane + (lat > 0 ? -4 : 4), -(W2 - 2), W2 - 2);
       c.laneT = 1.2;
-      break;
+      picked = true;
     }
   }
-  c.lane += (c.laneTarget - c.lane) * damp(1.3, dt);
-  const ahead = S[(idx + Math.round(35 / tr.spacing)) % N].curv;
-  const apex = -Math.sign(ahead) * Math.min(1, Math.abs(ahead) * 70) * (W2 - 3);   // hug the inside of the next corner
-  const lane = clamp(c.lane * 0.5 + apex * 0.6, -(W2 - 1.8), W2 - 1.8);
-  const look = Math.round((7 + spd * 0.42) / tr.spacing);
-  const s = S[(idx + look) % N];
-  const tx = s.pos.x + s.right.x * lane, tz = s.pos.z + s.right.z * lane;
-  const diff = wrapAngle(Math.atan2(tx - car.pos.x, tz - car.pos.z) - car.heading);
-  inp.steer = clamp(diff * 2.4, -1, 1);
-  // (mods still hold last frame's abilities here) downforce: no scrub, so the limit is steering, not grip
-  const latLimit = (car.mods.downforce ? 0.99 * 1.45 : car.stats.grip * tr.grip) * 36 * 1.3;
+  c.lane += (c.laneTarget - c.lane) * damp(pro ? 2.5 : 1.3, dt);
+  const df = car.mods.downforce, G = df ? 0.99 : car.stats.grip * tr.grip, St = car.stats.steer * (1 + 0.25 * df);
+  if (!pro) {
+    const ahead = S[(idx + Math.round(35 / tr.spacing)) % N].curv;
+    const apex = -Math.sign(ahead) * Math.min(1, Math.abs(ahead) * 70) * (W2 - 3);   // hug the inside of the next corner
+    const lane = clamp(c.lane * 0.5 + apex * 0.6, -(W2 - 1.8), W2 - 1.8);
+    const look = Math.round((7 + spd * 0.42) / tr.spacing);
+    const s = S[(idx + look) % N];
+    const tx = s.pos.x + s.right.x * lane, tz = s.pos.z + s.right.z * lane;
+    const diff = wrapAngle(Math.atan2(tx - car.pos.x, tz - car.pos.z) - car.heading);
+    inp.steer = clamp(diff * 2.4, -1, 1);
+  } else {
+    // follow the path (racing line x lv.line + lane offset): yaw-rate feedforward from its curvature a moment ahead (the
+    // steering lags ~0.2 s) + course and cross-track feedback, as a share of the yaw rate the car has at this speed.
+    // Drifting (stepCar) it yaws (0.9 + 0.5 steer·dir) x that rate, so the steer maps the other way round
+    const w = lv.line, s = S[idx], h0 = Math.atan2(s.tan.x, s.tan.z), l = (idx + Math.round((2 + spd * 0.2) / tr.spacing)) % N;
+    // (a path pushed past the road's edge by the lane offset runs along the edge: steer by the road there, not the line)
+    const raw = line.off[idx] * w + c.lane * 0.5, lane = clamp(raw, -(W2 - 1.8), W2 - 1.8), wl = lane === raw ? w : 0;
+    const e = (car.pos.x - s.pos.x) * s.right.x + (car.pos.z - s.pos.z) * s.right.z - lane;   // + = right of the path
+    const course = spd > 5 ? Math.atan2(car.vel.x, car.vel.z) : car.heading;
+    const yaw = spd * lerp(S[l].curv, line.curv[l], wl) + 5 * (wrapAngle(h0 + wl * wrapAngle(line.head[idx] - h0) - course) + Math.atan2(1.5 * e, spd + 3));
+    const rate = Math.max(0.3, St * Math.min(1, spd / 6) / (1 + spd / (50 * G))), d = c.driftDir;
+    inp.steer = clamp(c.drift ? d * (yaw * d / rate - 0.9) / 0.5 : yaw / rate, -1, 1);
+    // hairpin ahead (lv.drift): kick into a drift at its start (hard steer + a dab of brake), ride it out, straighten to end it
+    c.aiDrift = false;
+    if (lv.drift && !df) {
+      const pin = line.pin, next = pin[(idx + Math.round((3 + spd * 0.12) / tr.spacing)) % N];
+      if (c.drift && (pin[idx] || next) !== c.driftDir) inp.steer = 0;
+      else if (!c.drift && spd > 20 && !pin[idx] && next) { c.aiDrift = true; inp.steer = next; }
+    }
+  }
   const range = Math.round((25 + spd * 1.8) / tr.spacing);
   let vAllowed = Infinity;
-  for (let k = 2; k < range; k += 3) {
-    const kap = Math.abs(S[(idx + k) % N].curv) + 1e-4;
-    const vi = Math.sqrt(latLimit / kap);
-    vAllowed = Math.min(vAllowed, Math.sqrt(vi * vi + 2 * 18 * k * tr.spacing));
+  if (!pro) {
+    // (mods still hold last frame's abilities here) downforce: no scrub, so the limit is steering, not grip
+    const latLimit = (car.mods.downforce ? 0.99 * 1.45 : car.stats.grip * tr.grip) * 36 * 1.3;
+    for (let k = 2; k < range; k += 3) {
+      const kap = Math.abs(S[(idx + k) % N].curv) + 1e-4;
+      const vi = Math.sqrt(latLimit / kap);
+      vAllowed = Math.min(vAllowed, Math.sqrt(vi * vi + 2 * 18 * k * tr.spacing));
+    }
+    inp.throttle = spd < vAllowed ? 1 : 0.2;
+    inp.brake = spd > vAllowed + 3 ? clamp((spd - vAllowed) / 8, 0.2, 1) : 0;
+  } else {
+    // The car's real limit (stepCar): at speed v it yaws at most steer / (1 + v / (50 grip)) rad/s, so it holds a curvature
+    // kap up to the v with v·kap·(1 + v / (50 grip)) = steer. lv.corner of that on the line it drives, braking at lv.brake.
+    // Also notes the road ahead for the ability tactics: flat-out metres (straight), metres to the next lift (corner),
+    // metres it can still go at this speed before it has to brake (room)
+    const top = car.stats.top * c.skill, reach = Math.max(range, Math.round(250 / tr.spacing));
+    c.straight = c.corner = c.room = 250;
+    // drift zones count at drift yaw while drifting or before one (a drift starts at its entry only)
+    const pinYaw = lv.drift && !df && (c.drift || !line.pin[idx]) ? PIN.yaw : 1;
+    for (let k = 0; k < reach; k += 2) {
+      const i = (idx + k) % N, kap = lerp(Math.abs(S[i].curv), Math.abs(line.curv[i]), lv.line) + 1e-4, a = kap / (50 * G);
+      const sr = St * (line.pin[i] ? pinYaw : 1);
+      const vi = lv.corner * (Math.sqrt(kap * kap + 4 * a * sr) - kap) / (2 * a), d = k * tr.spacing;
+      if (k < range) vAllowed = Math.min(vAllowed, Math.sqrt(vi * vi + 2 * lv.brake * d));
+      if (vi < top * 0.9 && d < c.straight) c.straight = d;
+      if (vi < spd * 0.85 && d < c.corner) c.corner = d;
+      if (vi < spd) c.room = Math.min(c.room, d - (spd * spd - vi * vi) / (2 * lv.brake));
+    }
+    vAllowed = Math.min(vAllowed, follow);
+    inp.throttle = spd < vAllowed ? 1 : spd < vAllowed + 2 ? 0.3 : 0;
+    inp.brake = spd > vAllowed + 1 ? clamp((spd - vAllowed) / 4, 0.3, 1) : 0;
+    if (c.aiDrift) inp.brake = Math.max(inp.brake, 0.4);
+    if (lv.err && race.state === 'running') {   // easy: now and then a twitch of the wheel and a lift
+      c.errT = (c.errT ?? Math.random() * 60 / lv.err) - dt;
+      if (c.errT <= 0) { c.errT = (0.5 + Math.random()) * 60 / lv.err; c.errDur = 0.4 + Math.random() * 0.6; c.errSteer = (Math.random() < 0.5 ? -1 : 1) * (0.2 + Math.random() * 0.2); }
+      if (c.errDur > 0) { c.errDur -= dt; inp.steer = clamp(inp.steer + c.errSteer, -1, 1); inp.throttle *= 0.5; }
+    }
   }
-  inp.throttle = spd < vAllowed ? 1 : 0.2;
-  inp.brake = spd > vAllowed + 3 ? clamp((spd - vAllowed) / 8, 0.2, 1) : 0;
   inp.ability = false;
-  if (car.control === 'cpu' && race.state === 'running' && car.ability && car.ability.gauge >= 1 && !(car.ability.active > 0)) {
-    if (c.abilDelay == null) c.abilDelay = Math.random() * 4;
-    c.abilDelay -= dt;
-    if (c.abilDelay <= 0) { inp.ability = true; c.abilDelay = null; }
+  const ab = car.ability;
+  if (car.control === 'cpu' && race.state === 'running' && ab && ab.gauge >= 1 && !(ab.active > 0)) {
+    if (lv.tactics === 'smart') {   // when the situation suits the ability (abilities.js), or any straight after lv.hold s
+      c.abilDelay = (c.abilDelay ?? 0) + dt;
+      // (not a warp: a straight isn't enough, it needs room to brake after the jump)
+      const why = cpuAbility(race, car, { straight: c.straight, corner: c.corner, room: c.room })
+        || (c.abilDelay > lv.hold && c.straight > 60 && ab.id !== 'oil' && ab.id !== 'warp' && 'hold');
+      if (why) { inp.ability = true; c.abilDelay = null; c.abilWhy = why; }
+    } else {
+      if (c.abilDelay == null) c.abilDelay = lv.tactics === 'late' ? 4 + Math.random() * 8 : Math.random() * 4;
+      c.abilDelay -= dt;
+      if (c.abilDelay <= 0) { inp.ability = true; c.abilDelay = null; }
+    }
   }
-  if (race.state === 'running' && Math.abs(car.speed) < 2 && car.spin <= 0) c.stuck += dt; else c.stuck = 0;
-  if (c.stuck > 2.5) respawn(ctx, car);
+  // stopped (or, difficulty drivers, facing backwards after a spin) too long: back onto the road. Not while it waits
+  // behind a stopped car (follow): it is steering round it, and a reset would put it back on the same spot
+  const back = pro && car.spin <= 0 && fx * S[idx].tan.x + fz * S[idx].tan.z < -0.3;
+  if (race.state === 'running' && ((Math.abs(car.speed) < 2 && car.spin <= 0 && !(follow < 2)) || back)) c.stuck += dt; else c.stuck = 0;
+  if (c.stuck > (pro ? lv.recover : 2.5)) respawn(ctx, car);
 }
 
 // ======================================================================================
@@ -943,7 +1099,7 @@ function stepCar(ctx, car, dt) {
   let yawT = c.steerS * steerRate * (vF < -0.5 ? -1 : 1);
   if (c.drift && df) endDrift(ctx, car);
   // drift only on purpose: hard steer + brake at speed (keyboard steering is always full lock), the player's own steer
-  if (!c.drift && !df && !spinning && vF > 18 && Math.abs(c.steerS) > 0.6 && Math.abs(inp.steer) > 0.6 && inp.brake > 0.3 && car.control !== 'cpu') {
+  if (!c.drift && !df && !spinning && vF > 18 && Math.abs(c.steerS) > 0.6 && Math.abs(inp.steer) > 0.6 && inp.brake > 0.3 && (car.control !== 'cpu' || c.aiDrift)) {
     c.drift = true; c.driftDir = Math.sign(c.steerS); c.driftT = 0;
   }
   if (c.drift) {
@@ -1375,8 +1531,10 @@ function update(ctx, dt) {
     }
     c.slip += (slip - c.slip) * damp(3, dt);
     if (car.control === 'cpu' && leadLocal > -Infinity) {
-      const gap = (car.progress - leadLocal) * race.track.length;
-      c.rubber = gap > 0 ? lerp(1, 0.93, smooth(40, 220, gap)) : lerp(1, 1.06, smooth(60, 300, -gap));
+      // rubber band by difficulty (data.js); behindSec: the gap behind in seconds at the leading human's average speed
+      const lv = ctx.lv, len = race.track.length, gap = (car.progress - leadLocal) * len, [mul, a, b] = gap > 0 ? lv.ahead : lv.behind;
+      const g = gap > 0 ? gap : -gap / (lv.behindSec ? Math.max(25, leadLocal * len / Math.max(race.time, 1)) : 1);
+      c.rubber = lerp(1, mul, smooth(a, b, g));
     }
   }
 
