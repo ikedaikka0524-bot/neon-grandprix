@@ -1376,7 +1376,7 @@ function spawnFaceWall(race, S, owner, dur) {
 function faceWanted(race, car) {
   return race.cars.some(c => {
     const gap = (car.progress - c.progress) * (race.track?.length || 0);
-    return c !== car && !c.finished && !c._?.left && gap > 3 && gap < 30;
+    return c !== car && !c.finished && !c._?.left && !away(c) && gap > 3 && gap < 30;
   });
 }
 
@@ -1384,7 +1384,7 @@ function faceWanted(race, car) {
 // (kept in car._.abilWhy for logs). road = { straight: flat-out m ahead, corner: m to the next lift, room: m it can go at
 // this speed before it has to brake }. Anything without a rule here (new abilities) goes on a straight.
 export function cpuAbility(race, car, road) {
-  const id = car.ability.id, rivals = race.cars.filter(c => c !== car && !c.finished && !c._?.left);
+  const id = car.ability.id, rivals = race.cars.filter(c => c !== car && !c.finished && !c._?.left && !away(c));   // a diver's progress is frozen
   const gap = c => magnetGap(race, car, c);   // m along the track, + = ahead
   const near = r => rivals.filter(c => car.pos.distanceTo(c.pos) < r);
   if (car.spin > 0) return id === 'robotdash' && 'spin';   // the robot shakes a spin off; anything else would be wasted
@@ -1628,6 +1628,13 @@ function diveOut(race, S, car) {
   const inside = d.D ? d.maxS - d.s0 : Math.min(DIVE.cpuIn * d.inT, RUN);
   const dist = clamp(diveGain(car, d, DIVE_T, inside) || 0, 0, L * 0.9);   // reaching the exit early still earns the full base
   const dest = warpDest(race, e, dist);
+  // a difficulty CPU (game.js racing line) lands on its line, heading along it: at the offset it went in with it landed
+  // off the line, often mid-corner, and the line-speed corner ran it into the wall (~3x the wall hits right after)
+  const line = car.control === 'cpu' && dest.i != null && tr.line, s = line && tr.samples[dest.i];
+  if (s) {
+    dest.pos.addScaledVector(s.right, line.off[dest.i] - _v.copy(dest.pos).sub(s.pos).dot(s.right));
+    dest.heading += wrap(line.head[dest.i] - dest.heading);
+  }
   if (!d.D) car.speed = d.speed0;
   if (tr?.samples && dest.i != null) car.speed = landSpeed(tr, car, dest.i, car.speed);
   car._.track = null;
