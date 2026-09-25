@@ -21,6 +21,8 @@
 1. Realtime Database の「ルール」タブを開く
 2. 中身をすべて消して、このリポジトリの `database.rules.json` の中身を貼り付け →「公開」
    - コースを追加したら `node tools/gen-rules.mjs` でファイルを作り直して、もう一度貼って公開
+   - クラウドセーブ（設定 → データ連携）のルール（`codes` / `own` / `members` / `saves`）も同じファイルに入っています。
+     ルールを貼り直すまで、データ連携は「つながりませんでした」になります
 
 ## 5. ウェブアプリを登録して設定をコピー
 1. 歯車 →「プロジェクトの設定」→「全般」→ 下の「マイアプリ」→ `</>`（ウェブ）
@@ -48,5 +50,6 @@ Java 17 以上が必要です。
 ```
 npx firebase-tools@13.35.1 emulators:start --only auth,database --project demo-neongp
 node tools/check-lb-rules.mjs          # ルールのテスト（エミュレーターのデータは消えます）
+node tools/check-sync-rules.mjs        # クラウドセーブのルールのテスト（同上）
 python -m http.server 8090             # ブラウザのコンソールで localStorage['ngp.lb.emu'] = '1' → 再読み込み
 ```

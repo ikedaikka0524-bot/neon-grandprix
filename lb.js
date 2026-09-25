@@ -54,14 +54,15 @@ function clean(uid, e, tid) {
   return { uid, name: cleanName(e.name), race: e.race, lap: e.lap, raceCar: e.raceCar, lapCar: e.lapCar, raceAt: +e.raceAt || 0, lapAt: +e.lapAt || 0 };
 }
 
-const within = (p, ms = 12000) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
+export const within = (p, ms = 12000) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error('timeout')), ms))]);
 
 // A failed import() stays failed for the life of the page (the browser caches it in the module map, so an import made
 // offline never works even after the signal is back). So: fetch() the SDK first (a failed fetch is not cached), and if
-// import() still fails, give up until a reload (queued runs are sent on the next boot).
+// import() still fails, give up until a reload (queued runs are sent on the next boot). sync.js (cloud save) shares
+// this connection and the device's anonymous uid.
 let conn = null, sdkDead = false;
 export const lbNeedsReload = () => sdkDead;
-function fb() {
+export function fb() {
   conn ||= (async () => {
     if (!lbReady()) throw new Error('not configured');
     if (sdkDead) throw new Error('reload needed');
@@ -74,7 +75,7 @@ function fb() {
   })().catch(e => { conn = null; throw e; });
   return conn;
 }
-async function uidOf(signIn) {
+export async function uidOf(signIn) {
   const { U, au } = await fb();
   await within(au.authStateReady());
   return au.currentUser?.uid || (signIn ? (await within(U.signInAnonymously(au))).user.uid : null);

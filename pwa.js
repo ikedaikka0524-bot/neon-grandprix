@@ -1,12 +1,12 @@
 // App shell: service worker (sw.js, offline play), 'アプリとして追加' per platform, and 設定 → データ引き継ぎ (a home-screen
 // app on iOS has its own localStorage, separate from Safari's). Node-safe at import: tools/check-pwa.mjs tests the codec.
-import { getSave, persist } from './save.js';
+import { getSave, persist, backupSave, replaceSave } from './save.js';
 import { CAR_BY_ID } from './data.js';
 import { cleanName } from './lb.js';
 
 /* ================= transfer code: NGP1.<base64url(gzip(save JSON))>.<FNV-1a of the rest> ================= */
 const MAX_CODE = 200000, MAX_JSON = 256 * 1024;
-const fnv = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193); return (h >>> 0).toString(36); };
+export const fnv = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193); return (h >>> 0).toString(36); };
 const b64u = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
 
 export async function encodeSave(save) {
@@ -86,11 +86,11 @@ if (typeof document !== 'undefined') {
   const PLUS = '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8v8M8 12h8"/></svg>';
   const page = () => location.href.split('#')[0];
   const CARD = {
-    prompt: () => '<p><b>アプリにして遊ぼう</b>ホーム画面からすぐ・全画面で遊べます</p><button class="btn primary sm" data-pwa="install">アプリとして追加</button>',
+    prompt: () => '<p><b>アプリにして遊ぼう</b><span class="pwa-d">ホーム画面からすぐ・全画面で遊べます</span></p><button class="btn primary sm" data-pwa="install">アプリとして追加</button>',
     ios: () => `<div class="pwa-ios" aria-hidden="true"><span>${SHARE}</span><i>→</i><span>${PLUS}ホーム画面に追加</span></div>`
       // Safari (WebKit tracking prevention) deletes a site's storage after 7 days of use without a visit; home-screen apps are exempt
-      + '<p><b>アプリにして全画面で遊ぼう</b>共有ボタン（無いときは「…」の中）→「ホーム画面に追加」。Safariのままだと、しばらく遊ばないとデータが消えることがあります（ホーム画面のアプリなら安全）。Safariで遊んだデータは 設定 →「データ引き継ぎ」で移せます</p>',
-    inapp: () => `<p><b>Safari / Chrome で開いてください</b>アプリ内ブラウザではホーム画面に追加できず、データが消えることもあります</p>`
+      + '<p><b>アプリにして全画面で遊ぼう</b><span class="pwa-d">共有ボタン（無いときは「…」の中）→「ホーム画面に追加」。Safariのままだと、しばらく遊ばないとデータが消えることがあります（ホーム画面のアプリなら安全）。Safariで遊んだデータは 設定 →「データ連携」か「データ引き継ぎ」で移せます</span></p>',
+    inapp: () => `<p><b>Safari / Chrome で開いてください</b><span class="pwa-d">アプリ内ブラウザではホーム画面に追加できず、データが消えることもあります</span></p>`
       + `<input class="inp" readonly value="${page().replace(/"/g, '&quot;')}" aria-label="このページのURL"><button class="btn primary sm" data-pwa="link">リンクをコピー</button>`
       + (LINE ? `<a class="btn sm" href="${location.pathname}?openExternalBrowser=1">ブラウザで開く</a>`
         : /Android/.test(ua) ? `<a class="btn sm" href="intent://${location.host}${location.pathname}#Intent;scheme=https;package=com.android.chrome;end">Chromeで開く</a>` : ''),
@@ -157,7 +157,7 @@ if (typeof document !== 'undefined') {
       const s = await decodeSave(box.value);
       if (!s) return say('コードが正しくありません。途中で切れていないか確かめてね', true);
       say('');
-      ask.innerHTML = '<p>いまのデータを、このコードのデータに<b>置き換えます</b>。いまのデータは元に戻せません（ゴーストはそのまま）</p>'
+      ask.innerHTML = '<p>いまのデータを、このコードのデータに<b>置き換えます</b>。いまのデータはバックアップに残ります（設定 →「元に戻す」、ゴーストはそのまま）</p>'
         + `<div class="pwa-cmp"><span>いま</span><b>${sum(getSave())}</b><span>コード</span><b>${sum(s)}</b></div>`
         + '<div class="pwa-acts"><button class="btn sm" data-x="no">やめる</button><button class="btn sm danger" data-x="yes">置き換える</button></div>';
       ask.hidden = false;
@@ -166,10 +166,9 @@ if (typeof document !== 'undefined') {
         if (!b) return;
         ask.hidden = true;
         if (b.dataset.x !== 'yes') return say('やめました');
-        const cur = getSave();   // the same object ui.js holds, so nothing can write the old data back
-        for (const k of Object.keys(cur)) delete cur[k];
-        Object.assign(cur, s);
-        persist();
+        // the old data goes to 設定 → データ連携 → 元に戻す; replaced in the object ui.js holds, so nothing writes it back
+        if (!backupSave('引き継ぎコードを読み込む前') || !replaceSave(s)) return say('この端末に保存できませんでした（空き容量不足か、保存できないブラウザです）', true);
+        persist();   // linked: goes to the cloud like any change
         box.value = '';
         say('引き継ぎました。読み込み直します…');
         setTimeout(() => location.reload(), 700);

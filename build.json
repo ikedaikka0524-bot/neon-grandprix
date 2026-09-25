@@ -1,5 +1,5 @@
 {
-  "build": "20260925034657",
+  "build": "20260925063610",
   "files": [
     "abilities.js",
     "carmodel.js",
@@ -31,6 +31,7 @@
     "scenery/spa.js",
     "scenery/suzuka.js",
     "scenery/yasmarina.js",
+    "sync.js",
     "theme-beach.js",
     "theme-city.js",
     "theme-desert.js",

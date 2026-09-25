@@ -240,6 +240,28 @@ button,a,input,select,textarea,label,.nd,#gfx{touch-action:manipulation}
   .modal{padding:16px 18px}
   .modal-actions{margin-top:12px}
 
-  /* install card over the menu column (it scrolls clear, index.html pads it), not over the pinned car panel's buttons */
-  .pwa-card{width:min(420px,calc(50vw - 24px));left:auto;right:max(12px,env(safe-area-inset-right))}
+  /* install card: a slim bar under the home screen instead of floating over it (#menu is a flex column: main gets
+     shorter by its height, and so does the pinned car panel), so it never covers a tile; the details are in 設定 */
+  .pwa-card{position:relative;inset:auto;flex:none;width:auto;max-height:none;margin:0;padding:5px 50px max(5px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));border-width:1px 0 0;border-radius:14px 14px 0 0;animation:none}
+  .pwa-card .pwa-inst{gap:6px 12px}
+  .pwa-card .pwa-inst p{flex:1 1 auto;min-width:0}
+  .pwa-card .pwa-inst p b{display:inline;font-size:14px}
+  .pwa-card .pwa-d{display:none}
+  .pwa-card .pwa-inst .inp{flex:1 1 100px;padding:6px 8px}
+  .pwa-card .pwa-x{top:50%;right:max(6px,env(safe-area-inset-right));transform:translateY(-50%)}
+  #menu:has(>.pwa-card) #scr-home{padding-bottom:0;--avail:calc(var(--vh) - 59px - max(12px,env(safe-area-inset-bottom)) - var(--pwa-h,0px))}
+
+  /* cloud save chooser: fits 360 px */
+  .sync-ask{padding:12px 16px;gap:8px}
+  .sync-ask h3{font-size:17px;margin:0}
+  .sync-ask>p{font-size:12px;line-height:1.45}
+  .sync-side{padding:8px 10px;gap:6px}
+  .sync-side .btn{padding:8px 10px}
+  .sync-code b{font-size:30px}
 }
+/* cloud save chooser on phones: two number pairs per row, the date and device across (portrait: the sides stacked) */
+@media (max-width:560px),(orientation:landscape) and (max-height:500px){
+  .sync-side dl{grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr);font-size:12px}
+  .sync-side dd:nth-of-type(n+5){grid-column:span 3}
+}
+@media (max-width:560px){.sync-cmp{grid-template-columns:minmax(0,1fr)}}

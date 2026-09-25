@@ -6,13 +6,14 @@ import {
   nodeCost, nodeBlockReason, computeStats, GACHA, ECONOMY, DIFFICULTY, DIFFICULTY_BY_ID,
 } from './data.js';
 import { TRACKS, TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
-import { getSave, persist, newCarRec, resetSave, reloadSave, loadGhost, saveGhost } from './save.js';
+import { getSave, persist, newCarRec, resetSave, reloadSave, loadGhost, saveGhost, backupSave } from './save.js';
 import { buildCarMesh, preloadCarModels } from './carmodel.js';
 import { startRace, stopRace, raceBack } from './game.js';
 import { mountTouchSettings } from './touch.js';
 import { hostRoom, joinRoom } from './net.js';
 import { BUILD } from './version.js';
 import { lbReady, lbTop, lbGhost, lbQueue, lbFlush, lbPending, lbNeedsReload, nameAsked, setNameAsked, rarityOf, rankText } from './lb.js';
+import { initSync, syncKick, syncDialogClose, renderSyncSettings, syncLinked } from './sync.js';
 
 /* ================= helpers ================= */
 const $ = (s, r = document) => r.querySelector(s);
@@ -540,7 +541,7 @@ async function launch(opts, screen) {
   if (opts.mode !== 'online' && !$('#newVer').hidden && await update() !== false) return;
   const tok = ++raceTok, w = $('#wipe');
   race = { opts, screen, done: false };
-  hideResults(); hideTip(); modalClose?.();
+  hideResults(); hideTip(); modalClose?.(); syncDialogClose();   // (an online start comes from the host, any time)
   sfx.go();
   w.className = 'in';
   await sleep(opts.mode === 'online' ? 150 : 450);
@@ -577,6 +578,7 @@ function endRace() {
   show(back, false);
   checkUpdate(false);   // the 5-min poll skips race / results time, so back-to-back races would never look
   lbSend();             // a record held back by the name prompt goes out now
+  syncKick();           // cloud save: send the rewards / take a download that waited for the race
 }
 // Quit from the race (Esc → 終了する) or a failed start. Online that means leaving the room ('オンライン対戦から退出します'),
 // so the others get 'leave' (car removed, results not held up) and a quitting host can't restart over live races.
@@ -1128,6 +1130,7 @@ function renderSettings() {
   $$('#setQuality button').forEach(b => b.classList.toggle('on', b.dataset.q === save.quality));
   mountTouchSettings($('#setQuality').closest('.srow'), toast);   // 操作設定 (touch devices only)
   $('#setStats').innerHTML = `<span>レース<b>${save.stats.races}</b></span><span>優勝<b>${save.stats.wins}</b></span><span>コレクション<b>${owned().length}/${CARS.length}</b></span>`;
+  renderSyncSettings();   // データ連携 (sync.js)
 }
 function setName(v) {
   save.name = String(v).replace(/\s+/g, ' ').trim().slice(0, 12) || 'Player';
@@ -1155,6 +1158,7 @@ function renderLb() {
   $('#lbHint').textContent = LB.metric === 'race' && lbReady() ? 'タップでそのゴーストと対戦（いま選んでいる車で）' : '';
   const msg = (t, x = '') => { list.innerHTML = `<li class="lb-msg">${t}</li>${x}`; };
   if (!lbReady()) return msg('オンラインランキングは準備中です');
+  if (!navigator.onLine) return msg('オフラインです。電波が戻ると自動で読み込みます');   // (the SDK would wait out a 12 s timeout)
   msg('読み込み中…');
   lbTop(tid, LB.bucket, LB.metric).then(({ rows, me }) => {
     if (tok !== LB.tok) return;
@@ -1169,6 +1173,7 @@ function renderLb() {
 async function lbRace(uid) {
   const tid = curTrack(), e = [...LB.rows, LB.me].find(x => x?.uid === uid), c = CAR_BY_ID[save.selected.p1];
   if (LB.metric !== 'race' || !e) return;
+  if (!navigator.onLine) { sfx.error(); return toast('オフラインのためゴーストを読み込めません', 'err'); }
   if (!await ask({ title: 'ゴーストと対戦', html: `<p>${esc(e.name)} のゴースト（<b>${fmt(e.race)}</b>）とタイムアタック。</p><p>使う車：${rb(c.rarity)} ${esc(c.name)}</p>`, yes: '対戦する' })) return;
   toast('ゴーストを読み込み中…');
   try {
@@ -1206,6 +1211,7 @@ $('#rLbBtn').onclick = () => { endRace(); show('lb'); };
 $('#rNameOk').onclick = () => { setName($('#rName').value); $('#rLb').hidden = true; lbSend(); };
 $('#rName').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) $('#rNameOk').click(); });   // not the Enter that confirms an IME conversion
 addEventListener('online', lbSend);
+addEventListener('online', () => { if (cur === 'lb' && !race) renderLb(); });
 setTimeout(lbSend, 4000);   // runs queued while offline
 
 /* ================= event wiring ================= */
@@ -1331,9 +1337,11 @@ $('#setQuality').onclick = e => {
   renderSettings();
 };
 $('#setReset').onclick = async () => {
-  if (!await ask({ title: 'データのリセット', html: '<p>コイン・チケット・車・スキル・記録・ゴーストがすべて消えます。<br>本当にリセットしますか？</p>', yes: 'リセットする', danger: true })) return;
+  if (!await ask({ title: 'データのリセット', html: `<p>コイン・チケット・車・スキル・記録・ゴーストがすべて消えます。${syncLinked() ? '<b>連携中のほかの端末のデータもリセットされます。</b>' : ''}<br>本当にリセットしますか？</p><p class="hint">直前のデータは 設定 → データ連携 →「元に戻す」で戻せます（ゴーストは戻りません）</p>`, yes: 'リセットする', danger: true })) return;
+  backupSave('リセットする前');
   CARS.forEach(c => TRACKS.forEach(t => saveGhost(c.id, t.id, null)));
   save = resetSave();
+  persist();   // linked: the reset goes to the cloud like any change
   gaFocus = treeCar = null;
   refreshWallet();
   renderSettings();
@@ -1370,6 +1378,7 @@ addEventListener('keydown', e => {
     return;
   }
   if (e.code === 'Escape') {
+    if (syncDialogClose()) return;
     if (modalClose) modalClose();
     else if (cur !== 'home') goBack();
     return;
@@ -1391,6 +1400,7 @@ for (const ev of ['pointerup', 'click', 'keydown']) addEventListener(ev, guard, 
 addEventListener('popstate', () => {
   if (race) race.done ? endRace() : raceBack();
   else if (!$('#gfx').classList.contains('hidden')) fx.anim ? fxSkip() : $('#gOk').click();
+  else if (syncDialogClose()) { /* sync chooser: decide later */ }
   else if (modalClose) modalClose();
   else if (cur !== 'home') goBack();
   else toast('もう一度「戻る」で終了します');
@@ -1465,6 +1475,13 @@ setInterval(() => { if (!race) checkUpdate(false); }, 5 * 60e3);
 $('#homeCourses').innerHTML = `<span class="tz-h"><small>COURSES</small><b>${TRACKS.length} コース</b><em>${TRACKS.map(t => t.label || THEME[t.theme].name).join('・')}</em></span>`
   + `<span class="tz-maps">${TRACKS.map(t => `<i style="--tc:${THEME[t.theme].c}" title="${esc(t.name)}">${COURSE[t.id].svg(false)}</i>`).join('')}</span>`;
 preloadCarModels(CARS.map(c => c.id)).catch(() => {});
+// cloud save: a download / the conflict chooser waits for no race / dialog / gacha reveal / online room (its host may
+// start any moment), then the save object (the one `save` holds) is replaced in place and the screen redrawn
+initSync({
+  idle: () => !race && !modalClose && !NET.s && $('#gfx').classList.contains('hidden'),
+  applied: () => { refreshWallet(); if (!race) rerender(); },
+  toast,
+});
 show('home', false);
 requestAnimationFrame(loop);
 let rejoin = null;   // an outdated guest pressed 更新 in a room: go back in

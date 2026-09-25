@@ -943,6 +943,75 @@
           }
         }
       }
+    },
+    "codes": {
+      "$code": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.exists() && newData.parent().parent().child('members/' + newData.child('g').val() + '/' + auth.uid).exists()) || (data.exists() && !newData.exists() && (data.child('by').val() == auth.uid || root.child('members/' + data.child('g').val() + '/' + auth.uid).exists() || newData.parent().parent().child('members/' + data.child('g').val() + '/' + auth.uid).exists())))",
+        ".validate": "$code.matches(/^[23456789A-HJ-NP-Z]{6}$/) && newData.hasChildren(['g', 'exp', 'by'])",
+        "g": {
+          ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{20,40}$/)"
+        },
+        "exp": {
+          ".validate": "newData.isNumber() && newData.val() > now && newData.val() <= now + 600000"
+        },
+        "by": {
+          ".validate": "newData.val() == auth.uid"
+        },
+        "$other": {
+          ".validate": "false"
+        }
+      }
+    },
+    "own": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid && newData.exists() && (!data.exists() || !newData.parent().parent().child('members/' + data.val() + '/' + $uid).exists())",
+        ".validate": "newData.isString() && newData.val().matches(/^[A-Za-z0-9_-]{20,40}$/)"
+      }
+    },
+    "members": {
+      "$g": {
+        ".read": "auth != null && data.child(auth.uid).exists()",
+        "$uid": {
+          ".write": "auth != null && auth.uid == $uid && ((!newData.exists() && (newData.parent().exists() || !newData.parent().parent().parent().child('saves/' + $g).exists())) || (data.exists() && newData.exists()) || (!data.parent().exists() && !root.child('saves/' + $g).exists() && newData.parent().parent().parent().child('own/' + $uid).val() == $g) || (newData.child('code').val() != null && root.child('saves/' + $g).exists() && root.child('codes/' + newData.child('code').val() + '/g').val() == $g && root.child('codes/' + newData.child('code').val() + '/exp').val() > now && !newData.parent().parent().parent().child('codes/' + newData.child('code').val()).exists()))",
+          ".validate": "$g.matches(/^[A-Za-z0-9_-]{20,40}$/) && newData.hasChildren(['label', 'seen'])",
+          "label": {
+            ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 24"
+          },
+          "seen": {
+            ".validate": "newData.val() == now"
+          },
+          "code": {
+            ".validate": "newData.isString() && newData.val().matches(/^[23456789A-HJ-NP-Z]{6}$/)"
+          },
+          "$other": {
+            ".validate": "false"
+          }
+        }
+      }
+    },
+    "saves": {
+      "$g": {
+        ".read": "auth != null && root.child('members/' + $g + '/' + auth.uid).exists()",
+        ".write": "auth != null && ((newData.exists() && newData.parent().parent().child('members/' + $g + '/' + auth.uid).exists()) || (!newData.exists() && root.child('members/' + $g + '/' + auth.uid).exists() && !newData.parent().parent().child('members/' + $g).exists()))",
+        ".validate": "newData.hasChildren(['data', 'rev', 'at', 'by']) && ((!data.exists() && newData.child('rev').val() == 1) || (data.exists() && newData.child('rev').val() == data.child('rev').val() + 1))",
+        "data": {
+          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 200000"
+        },
+        "rev": {
+          ".validate": "newData.isNumber()"
+        },
+        "at": {
+          ".validate": "newData.val() == now"
+        },
+        "by": {
+          ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 24"
+        },
+        "$other": {
+          ".validate": "false"
+        }
+      }
     }
   }
 }
