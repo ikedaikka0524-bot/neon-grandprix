@@ -62,6 +62,11 @@ const isRobot = c => c.ability?.id === 'robotdash' && c.ability.active > 0 && c.
 const chainProof = c => isRobot(c) || away(c) || (c.ability?.active > 0 && (c.ability.id === 'shield' || c.ability.id === 'phase'));
 // tokyodive: off in its own space (a remote diver is just hidden here) - nothing can target or slow it meanwhile
 const away = c => !!c?.ability?.away;
+// reflect: this car's mirrors are up (every attack aimed at it bounces back, see REFLECT)
+const mirrorOn = c => c?.ability?.id === 'reflect' && c.ability.active > 0;
+// CPU 'hold' fallback (game.js): no attack while any car's mirrors are up (it would come back; cpuAbility checks its target)
+export const mirrorBlocks = (race, id) => !!REFLECT[id] && race.cars.some(mirrorOn);
+const halfLen = c => (c?.def?.len || 4.2) / 2;   // a longer vehicle (data.js len: the 6 m truck)
 const flash = (race, text, color) => race.hud?.flash?.(text, color);
 const who = (race, car) => (race.mode === 'split' ? (car.control === 'p1' ? 'P1 ' : 'P2 ') : '');
 const _v = new THREE.Vector3(), _w = new THREE.Vector3();
@@ -182,6 +187,20 @@ void main() {
   float base = smoothstep(0.12, 0.0, h);
   float glow = clamp(f * 0.9 + bands * 0.35 + ribs * 0.4 + base * 0.8, 0.0, 1.0);
   gl_FragColor = vec4(mix(vec3(0.07, 0.0, 0.14), uColor * 1.6, glow), min((0.3 + glow * 0.7) * uOpacity, 0.95));
+  #include <colorspace_fragment>
+}`;
+
+// reflect: a glassy box shell round the car, bright bands sweeping along it, lit edges; uHit = a bounce just now
+const MIRROR_FRAG = `
+uniform vec3 uColor; uniform float uTime; uniform float uOpacity; uniform float uHit;
+varying vec3 vN; varying vec3 vV; varying vec3 vP;
+void main() {
+  float f = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 1.5);
+  float sweep = smoothstep(0.9, 1.0, sin((vP.z * 1.6 + vP.y * 0.9) * 6.2832 - uTime * 4.5) * 0.5 + 0.5);
+  vec3 e = abs(vP) * 2.0;
+  float edge = smoothstep(0.92, 1.0, max(max(min(e.x, e.y), min(e.y, e.z)), min(e.x, e.z)));
+  float a = (0.05 + f * 0.2 + sweep * 0.5 + edge * 0.45 + uHit * 0.75) * uOpacity;
+  gl_FragColor = vec4(uColor * (0.8 + sweep + uHit), a);
   #include <colorspace_fragment>
 }`;
 
@@ -411,6 +430,23 @@ function shieldMesh(S, fx) {
   fx.group.add(m);
   fx.mats.push(mat);
   return (fx.shield = m);
+}
+
+function mirrorMesh(S, fx) {
+  if (fx.mirror) return fx.mirror;
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(COLOR.reflect) }, uTime: { value: 0 }, uOpacity: { value: 1 }, uHit: { value: 0 } },
+    vertexShader: SHIELD_VERT, fragmentShader: MIRROR_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+  S.geo.cube ||= new THREE.BoxGeometry(1, 1, 1);
+  const m = new THREE.Mesh(S.geo.cube, mat);
+  m.position.copy(fx.center);
+  m.userData.scale = new THREE.Vector3(fx.size.x + 0.3, fx.size.y + 0.25, fx.size.z + 0.3);
+  m.visible = false;
+  m.renderOrder = 21;
+  fx.group.add(m);
+  fx.mats.push(mat);
+  return (fx.mirror = m);
 }
 
 function clockMeshes(S, fx) {
@@ -675,6 +711,21 @@ function carVisuals(race, S, car, dt) {
     }
   }
 
+  if (a.id === 'reflect' && (act || fx.mirror)) {
+    const m = mirrorMesh(S, fx), on = act === 'reflect';
+    m.visible = on && (a.active > 1 || Math.sin(t * 28) > -0.3);   // blink before expiring
+    if (on) {
+      const pop = a.t < 0.25 ? easeOutBack(a.t / 0.25) : 1;
+      m.scale.copy(m.userData.scale).multiplyScalar(Math.max(0.01, pop * (1 + a.hit * 0.08)));
+      const u = m.material.uniforms;
+      u.uTime.value = t; u.uHit.value = a.hit; u.uOpacity.value = Math.min(1, a.active * 2);
+      if (Math.random() < dt * 16) {   // glints running over the panels
+        world(_w.set(fx.center.x + rnd(-0.5, 0.5) * fx.size.x, rnd(0.4, fx.box.max.y), fx.center.z + rnd(-0.5, 0.5) * fx.size.z));
+        S.glow.emit(_v.x, _v.y, _v.z, vx, rnd(0.3, 1.2), vz, pick(PAL.reflect), rnd(0.2, 0.4), 0.5, 0.05, 0, 0);
+      }
+    }
+  }
+
   if (a.id === 'phase' && act === 'phase' && a.phaseSwap) {
     const o = (0.3 + 0.12 * Math.sin(t * 13) + rnd(0, 0.06)) * (a.active < 1 ? (Math.sin(t * 30) > 0 ? 1.8 : 0.6) : 1);
     for (const s of a.phaseSwap) for (const m of [].concat(s.clone)) m.opacity = (m.userData.baseOpacity ?? 1) * o;
@@ -810,7 +861,8 @@ function applyOwn(race, car, a) {
     a.active = 0;   // caught up (or overtook / target gone): the pull ends
     return;
   }
-  if (!m) return;
+  // (a remote target with its mirrors up, as seen here: no pull meanwhile; its own client decides, its bounce ends the pull)
+  if (!m || (tg?.control === 'net' && mirrorOn(tg))) return;
   // dock behind the target instead of ramming it at +45%: no pull while closing in faster than it could brake off by then
   if (tg && car.speed > Math.max(0, tg.speed || 0) + Math.sqrt(2 * MAGNET_DOCK * (gap - MAGNET_CATCH))) return;
   if (a.id === 'boost' || a.id === 'nitro' || a.id === 'magnet' || a.id === 'hellchain') { m.speedMul += a.power; m.accelMul += a.power; }
@@ -820,6 +872,7 @@ function applyOwn(race, car, a) {
   else if (a.id === 'domain') { m.speedMul += DOMAIN_BOOST; m.accelMul += DOMAIN_BOOST; }        // a.power = slow inside the dome
   else if (a.id === 'downforce') m.downforce = a.power;
   else if (a.id === 'tokyodive' && a.away) { m.noCollide = true; m.noOffroadPenalty = true; }
+  else if (a.id === 'reflect') m.reflect = true;   // game.js collide(): keeps its speed, the rammer bounces off
   else if (a.id === 'robotdash') {
     if (isRobot(car)) m.invulnerable = true;
     else { m.speedMul += a.power; m.accelMul += a.power; }   // changed back: the dash
@@ -831,7 +884,7 @@ function endFx(S, car) {
   if (a.id === 'shield') burst(S.glow, p, 40, PAL.shield, 8, 0.5, 0.45, 0.05);
   else if (a.id === 'phase') { setPhase(car, false); burst(S.glow, p, 30, PAL.phase, 5, 0.6, 0.4, 0.05); }
   else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash', 'hellchain'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
-  else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash', 'tokyodive'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
+  else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash', 'tokyodive', 'reflect'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
   else burst(S.smoke, p, 10, PAL.smoke, 2, 0.8, 0.5, 1.4, -0.5, 1.5, 0.25);
 }
 
@@ -939,6 +992,7 @@ function spawnOil(race, S, pose, life, power, owner) {
         const dx = p.x + ex * s - pos.x, dz = p.z + ez * s - pos.z;
         if (dx * dx + dz * dz > OIL_RADIUS * OIL_RADIUS || Math.abs(c.pos.y - pos.y) > 2.5) continue;
         this.hits.add(c);
+        if (reflects(race, c, this.owner, 'oil', { pow: this.power, at: pos })) break;   // shattered (bounce() ends its life)
         oilHit(race, S, c, this.power);
       }
       return this.age < this.life;
@@ -1058,9 +1112,9 @@ function screenFlash(race, car, [bg, frames, ms] = THUNDER_SCREEN) {
   setTimeout(() => el.remove(), ms + 10);
 }
 
-// bolt from the sky onto the target (follows it for its 0.4 s), spark burst; spin unless shielded.
-// A 'net' target's spin only turns its mesh here: its own client applies the real one.
-function strike(race, S, target, pow) {
+// bolt from the sky onto the target (follows it for its 0.4 s), spark burst; spin unless shielded or reflecting (src = the
+// caster, may be null). A 'net' target's spin only turns its mesh here: its own client applies the real one (or reflects).
+function strike(race, S, target, pow, src = null) {
   if (!target?.pos || away(target)) return;
   const bolt = new THREE.Mesh(ribbons(jag(new THREE.Vector3(rnd(-8, 8), 75, rnd(-8, 8)), new THREE.Vector3(0, 0.9, 0), 9, 6, 2.4, [], true)), boltMat(S, '#ffffff'));
   bolt.userData.ownGeo = true;
@@ -1070,12 +1124,13 @@ function strike(race, S, target, pow) {
     o.position.copy(target.pos);
     o.material.opacity = (k > 0.12 && k < 0.2) || (k > 0.45 && k < 0.52) ? 0.15 : 1 - k * 0.6;   // strike, flicker, restrike
   });
-  const p = new THREE.Vector3(target.pos.x, target.pos.y + 0.9, target.pos.z), guard = !!target.mods?.invulnerable;
+  const p = new THREE.Vector3(target.pos.x, target.pos.y + 0.9, target.pos.z), guard = !!target.mods?.invulnerable || mirrorOn(target);
   glowBall(S, p, guard ? 2.4 : 2.8, 0.22, guard ? '#e8feff' : '#cfeaff');
   burst(S.glow, p, 70, guard ? PAL.shield : PAL.thunderbolt, 14, 0.6, 0.55, 0.05, 12, 1.5, 1, 4);
   ring(S, _w.set(p.x, target.pos.y + 0.15, p.z), COLOR.thunderbolt, { r0: 1, r1: 9, life: 0.5 });
-  if (target.finished) return;
+  if (target.finished || reflects(race, target, src, 'thunderbolt', { pow })) return;
   if (guard) {
+    if (mirrorOn(target)) return;   // a remote reflector: its own client decides (the bounce message follows)
     if (target.ability) target.ability.hit = 1;
     if (isHuman(target)) flash(race, who(race, target) + 'ガード!', COLOR.shield);
     return;
@@ -1162,7 +1217,7 @@ const HEAT = pal('#8a1606', '#ffc861');
 // the owner's nose -> the target's tail, sagging and rattling. Abilities run before physics: the ends are put where the
 // cars will be drawn this frame (pos + vel dt). at(s) reuses _cA / _cB: use one curve before asking for the next.
 function chainCurve(car, tg, dt, t) {
-  for (const [c, P, k] of [[car, _cA, 1.95], [tg, _cB, -1.95]]) {
+  for (const [c, P, k] of [[car, _cA, halfLen(car) - 0.15], [tg, _cB, 0.15 - halfLen(tg)]]) {
     P.set(c.pos.x + Math.sin(c.heading) * k + (c.vel?.x || 0) * dt, c.pos.y + 0.62, c.pos.z + Math.cos(c.heading) * k + (c.vel?.z || 0) * dt);
   }
   const len = _cA.distanceTo(_cB), sag = clamp(len * 0.02, 0.1, 0.45);
@@ -1241,6 +1296,9 @@ function chainSnapFx(S, car, tg) {
 function chainTow(race, car, a) {
   const tg = a.target, tr = race.track;
   if (a.t < HELL.hook) return;   // still flying
+  // a remote target's mirrors up (as this client sees them): hold the tow. Its own client decides: its bounce message
+  // releases the chain here (bounce()); if our view of the mirrors ends first, it didn't reflect it and the chain carries on
+  if (tg.control === 'net' && mirrorOn(tg)) return;
   const gap = magnetGap(race, car, tg), proof = chainProof(tg);
   // (owner quit online: its car is frozen where it left and no 'rel' will come)
   if (a.t >= a.chainDur || car.finished || car._?.left || tg.finished || tg._?.left || proof || gap < 0 || gap > HELL.range * 1.5 || car.pos.distanceTo(tg.pos) <= HELL.snap) {
@@ -1269,25 +1327,105 @@ function chainTow(race, car, a) {
   m.assist = clamp(wrap(Math.atan2(p.pos.x + p.right.x * lane - car.pos.x, p.pos.z + p.right.z * lane - car.pos.z) - car.heading) * 2.4, -1, 1);
 }
 
-// the chain snaps: slingshot, or the small consolation boost when the target shrugged it off. The owner's client tells
-// everyone ('rel'); every client also releases on its own checks, whichever comes first.
-function chainRelease(race, car, a, sling) {
+// the chain snaps: slingshot, or the small consolation boost when the target shrugged it off, or nothing when it was
+// reflected (bounced: the penalty comes from bounce()). The owner's client tells everyone ('rel'); every client also
+// releases on its own checks, whichever comes first.
+function chainRelease(race, car, a, sling, bounced = false) {
   const S = st(race), tg = a.target, b = sling ? HELL_SLING : HELL_MISS;
   if (tg?.pos) chainSnapFx(S, car, tg);
-  if (tg && !sling && tg.control !== 'net' && !away(tg)) {
+  if (tg && !sling && !bounced && tg.control !== 'net' && !away(tg)) {
     if (tg.ability) tg.ability.hit = 1;
     if (isHuman(tg)) flash(race, who(race, tg) + 'ガード!', COLOR.shield);
   }
   // the snap whips the target round: a spin on the target's own client (every client runs the release; remote cars skip)
-  if (tg && sling && tg.control !== 'net' && !tg.finished && !chainProof(tg)) {
+  if (tg && sling && tg.control !== 'net' && !tg.finished && !chainProof(tg) && !mirrorOn(tg)) {
     tg.spin = Math.max(tg.spin || 0, HELL_SLING.whip);
     if (isHuman(tg)) flash(race, who(race, tg) + '鎖で振り回された!', COLOR.hellchain);
   }
   a.chained = false; a.target = null; a.t = 0;
-  a.active = a.activeMax = b.dur;
+  a.active = a.activeMax = bounced ? 0 : b.dur;
   a.power = b.pow;
   if (sling && isHuman(car)) flash(race, who(race, car) + 'スリングショット!', COLOR.hellchain);
-  if (race.net && car.control === 'p1') race.net.send({ t: 'ability', pid: race.localPid, id: 'hellchain', rel: 1 });
+  if (race.net && car.control === 'p1') race.net.send({ t: 'ability', pid: race.localPid, id: 'hellchain', rel: 1, ...(bounced && { b: 1 }) });   // b: reflected, no slingshot / whip anywhere
+}
+
+// ---------- reflect ----------
+// While a car's mirrors are up, every attack aimed at it bounces back onto whoever made it; the car itself is untouched.
+// Only the reflecting car's own client decides (it owns the car): reflects() there applies the bounce to a local attacker
+// (solo / split: CPUs, the other player) or sends { t:'ability', id:'reflect', ref, tp /* attacker */, n, sp, sl, st, ox?, oz? }
+// so the attacker's own client applies it exactly once (dropped duplicates by pid + n; lost = no bounce, like any lost
+// ability message). The attacker's own part of the attack (tow, pull, boost) ends; an attacker that is itself immune
+// (shield / phase / robot / away) shrugs the bounce off: the reflect fizzles. Numbers per attack (x = the attack's own
+// numbers, k = the reflector's power, 1 = as strong as the attack was); end = the attacker's own part stops:
+const REFLECT = {
+  thunderbolt: (x, k) => ({ spin: x.pow * k, end: true }),                          // the bolt jumps to the caster; its boost ends
+  hellchain: (x, k) => ({ spin: HELL_SLING.whip * k, slow: 0.4, slowT: 1.5 * k, end: true }),   // snaps back: whipped round, no slingshot
+  magnet: (x, k) => ({ slow: 0.35, slowT: 1.5 * k, end: true }),                    // repelled: the pull ends, a short slow
+  timeslow: (x, k) => ({ slow: x.pow, slowT: x.left * k }),                         // the caster gets what was left of it
+  domain: (x, k) => ({ slow: Math.min(x.pow, DOMAIN_MAX_SLOW), slowT: Math.min(x.left, 3) * k }),   // the owner gets the dome's slow (≤ 3 s); the reflector is free in there
+  oil: (x, k) => ({ spin: x.pow * k }),                                             // the slick shatters, the glob flies back under the dropper
+  facewall: (x, k) => ({ slow: 0.35, slowT: 1.5 * k }),                             // the reflector drives through; the wall's owner is held back
+  robotdash: () => ({}),                                                            // the robot is immune: the knock just fizzles
+};
+const BOUNCE_MAX = { spin: 3, slow: 0.6, slowT: 6 };   // cap on what a (possibly crafted) message may ask for
+COLOR.reflect = '#bfefff';
+PAL.reflect = pal('#ffffff', '#e8f6ff', '#bfefff', '#8fd8ff', '#d9c8ff');
+const MIRROR_SCREEN = ['radial-gradient(ellipse at 50% 40%, rgba(255,255,255,0.85), rgba(190,235,255,0.5) 45%, rgba(120,170,255,0.35) 100%)',
+  [{ opacity: 1 }, { opacity: 0.2, offset: 0.25 }, { opacity: 0.6, offset: 0.4 }, { opacity: 0 }], 500];
+
+// an attack `id` by src (null: an unknown remote car) meets tg: true = tg reflects it (the caller leaves tg alone)
+function reflects(race, tg, src, id, x = {}) {
+  if (!mirrorOn(tg) || tg.finished || tg.control === 'net' || src === tg || !REFLECT[id]) return false;   // finished: out of the race, its mirrors too
+  const S = st(race), e = REFLECT[id](x, tg.ability.power || 1);
+  bounce(race, S, tg, src, id, e, x.at);
+  if (race.net && tg.control === 'p1' && src?.control === 'net' && src.pid != null) {
+    race.net.send({ t: 'ability', pid: race.localPid, id: 'reflect', ref: id, tp: String(src.pid), n: S.rn = (S.rn || 0) + 1,
+      x: r2(tg.pos.x), y: r2(tg.pos.y), z: r2(tg.pos.z), sp: r2(e.spin || 0), sl: r2(e.slow || 0), st: r2(e.slowT || 0), ...(x.at && { ox: r2(x.at.x), oz: r2(x.at.z) }) });
+  }
+  return true;
+}
+
+// on every client that learns of a reflection: the flash / beam, the attacker's own part ends, and where the attacker is
+// local, the bounce lands (or fizzles). tg may be null (unknown remote pid): the beam starts at `from`.
+function bounce(race, S, tg, src, id, e, at = null, from = tg?.pos) {
+  if (tg?.ability) tg.ability.hit = 1;
+  if (from) {
+    const p = _v.set(from.x, from.y + 1.4, from.z);
+    glowBall(S, p, 2, 0.22, '#ffffff');
+    ring(S, p, COLOR.reflect, { vertical: true, heading: (tg?.heading || 0) + Math.PI / 2, r0: 0.5, r1: 4, life: 0.35 });   // across the car, facing its sides
+    ring(S, _w.set(p.x, p.y - 1.2, p.z), '#ffffff', { r0: 1, r1: 7, life: 0.4, opacity: 0.7 });
+    burst(S.glow, p, 50, PAL.reflect, 11, 0.5, 0.5, 0.05, 0, 2);
+    if (src?.pos) {
+      const q = _w.set(src.pos.x, src.pos.y + 1, src.pos.z), beam = new THREE.Mesh(ribbons(jag(p.clone(), q.clone(), 0.6, 4, 0.9, [], false)), boltMat(S, COLOR.reflect));
+      beam.userData.ownGeo = true;
+      beam.frustumCulled = false;
+      beam.renderOrder = 22;
+      addFx(S, beam, 0.4, (o, k) => { o.material.opacity = (1 - k) * (k < 0.1 ? 0.6 : 1); });
+      ring(S, q, COLOR.reflect, { vertical: true, heading: src.heading, r0: 0.4, r1: 4, life: 0.4 });
+      burst(S.glow, q, 30, PAL.reflect, 8, 0.45, 0.45, 0.05, 0, 2);
+    }
+  }
+  if (at) {   // the oil slick: shattered, everywhere
+    burst(S.smoke, _w.set(at.x, (tg?.pos.y ?? 0) + 0.5, at.z), 24, PAL.oil, 7, 0.6, 0.4, 0.15, 12, 1, 0.9, 3);
+    for (const hz of race.hazards) if (hz.kind === 'oil' && hz.owner === src && (hz.pos.x - at.x) ** 2 + (hz.pos.z - at.z) ** 2 < 4) hz.life = Math.min(hz.life, hz.age);
+  }
+  const human = isHuman(tg || {}) ? tg : src && isHuman(src) ? src : null;
+  if (human) flash(race, who(race, human) + '反射！', COLOR.reflect);
+  if (!src) return;
+  const a = src.ability;
+  if (e.end && a) {   // the attacker's own part of it stops (on every client, so its visuals stop too)
+    if (a.chained) chainRelease(race, src, a, false, true);
+    else if (a.id === id && (id === 'magnet' || id === 'thunderbolt')) a.active = 0;
+  }
+  if (src.control === 'net' || src.finished || src._?.left || !a) return;
+  if (chainProof(src)) {   // shield / phase / robot / away: the bounce fizzles
+    a.hit = 1;
+    if (isHuman(src)) flash(race, who(race, src) + 'ガード!', COLOR.shield);
+    return;
+  }
+  if (e.spin > 0) src.spin = Math.max(src.spin || 0, e.spin);
+  if (e.slow > 0 && e.slowT > 0) { a.bounceP = Math.max(a.bounceT > 0 ? a.bounceP : 0, e.slow); a.bounceT = Math.max(a.bounceT || 0, e.slowT); }
+  if (isHuman(src)) { screenFlash(race, src, MIRROR_SCREEN); race.hud?.shake?.(src, 0.3); }
 }
 
 // ---------- facewall ----------
@@ -1380,6 +1518,17 @@ function faceWanted(race, car) {
   });
 }
 
+const armed = (c, k) => c.ability?.id === k && c.ability.gauge >= 1 && !(c.ability.active > 0) && !c.ability.sealed;
+// an attack on its way to car (shield / reflect): chained, a full thunderbolt / hellchain that would pick it, a dome near
+function incoming(race, car, rivals) {
+  if (rivals.some(c => c.ability?.chained && c.ability.target === car)) return 'chained';
+  if (rivals.some(c => armed(c, 'thunderbolt') && thunderTarget(race, c) === car)) return 'thunder armed';
+  if (rivals.some(c => armed(c, 'hellchain') && magnetTarget(race, c, HELL.snap, HELL.range) === car)) return 'chain armed';
+  if ((race.hazards || []).some(h => h.kind === 'domain' && h.on && h.owner !== car && !h.bounced?.has(car) && car.pos.distanceTo(h.center) < DOMAIN_R + 15)
+    || rivals.some(c => armed(c, 'domain') && car.pos.distanceTo(c.pos) < DOMAIN_R)) return 'domain';
+  return false;
+}
+
 // CPU tactics (difficulty 'hard' and up): game.js asks while a CPU's gauge is full and fires on a truthy answer, the reason
 // (kept in car._.abilWhy for logs). road = { straight: flat-out m ahead, corner: m to the next lift, room: m it can go at
 // this speed before it has to brake }. Anything without a rule here (new abilities) goes on a straight.
@@ -1392,29 +1541,33 @@ export function cpuAbility(race, car, road) {
     case 'boost': return road.straight > 80 && 'straight';
     case 'nitro': return road.straight > 140 && 'straight';
     case 'downforce': return road.corner > 10 && road.corner < 70 && 'corner';
+    // attacks: never at a car whose mirrors are up (it would all come back)
     case 'thunderbolt': {   // not leading, and the leader close enough to pass while it spins
       const t = thunderTarget(race, car), g = t ? gap(t) : 0;
-      return g > 0 && g < 120 && !t.mods?.invulnerable && `target ${Math.round(g)}m`;
+      return g > 0 && g < 120 && !t.mods?.invulnerable && !mirrorOn(t) && `target ${Math.round(g)}m`;
     }
     case 'magnet': case 'hellchain': {   // the car it would pick: the nearest one ahead
       const t = id === 'magnet' ? magnetTarget(race, car) : magnetTarget(race, car, HELL.snap, HELL.range), g = t ? gap(t) : 0;
-      return g >= (id === 'magnet' ? 30 : 20) && g <= 150 && !chainProof(t) && (id === 'magnet' || road.straight > 60) && `target ${Math.round(g)}m`;
+      return g >= (id === 'magnet' ? 30 : 20) && g <= 150 && !chainProof(t) && !mirrorOn(t) && (id === 'magnet' || road.straight > 60) && `target ${Math.round(g)}m`;
     }
-    case 'domain': { const n = near(35).filter(c => !c.mods?.invulnerable).length; return n > 0 && `${n} in range`; }
+    case 'domain': { const n = near(35).filter(c => !c.mods?.invulnerable && !mirrorOn(c)).length; return n > 0 && !near(DOMAIN_R).some(mirrorOn) && `${n} in range`; }
     case 'oil': {   // a car 5-30 m behind, about in line (the slick lands 4 m behind, 3 m wide)
       const s = race.track.samples[car.trackIndex];
-      return rivals.some(c => -gap(c) > 5 && -gap(c) < 30 && Math.abs((c.pos.x - car.pos.x) * s.right.x + (c.pos.z - car.pos.z) * s.right.z) < 3.5) && 'behind';
+      return rivals.some(c => -gap(c) > 5 && -gap(c) < 30 && !mirrorOn(c) && Math.abs((c.pos.x - car.pos.x) * s.right.x + (c.pos.z - car.pos.z) * s.right.z) < 3.5) && 'behind';
     }
-    case 'shield': {
-      if (rivals.some(c => c.ability?.chained && c.ability.target === car)) return 'chained';
-      const armed = (c, k) => c.ability?.id === k && c.ability.gauge >= 1 && !(c.ability.active > 0) && !c.ability.sealed;
-      if (rivals.some(c => armed(c, 'thunderbolt') && thunderTarget(race, c) === car)) return 'thunder armed';
-      if (rivals.some(c => armed(c, 'hellchain') && magnetTarget(race, c, HELL.snap, HELL.range) === car)) return 'chain armed';
-      if ((race.hazards || []).some(h => h.kind === 'domain' && h.on && h.owner !== car && car.pos.distanceTo(h.center) < DOMAIN_R + 15)
-        || rivals.some(c => armed(c, 'domain') && car.pos.distanceTo(c.pos) < DOMAIN_R)) return 'domain';
-      return near(6).length > 0 && 'close';
+    case 'shield': return incoming(race, car, rivals) || (near(6).length > 0 && 'close');
+    // like the shield, plus pulls, fields and slicks on their way, or a crowd to bounce rams off
+    case 'reflect': {
+      const why = incoming(race, car, rivals);
+      if (why) return why;
+      if (rivals.some(c => c.ability?.id === 'magnet' && c.ability.active > 0 && c.ability.target === car)) return 'pulled';
+      if ((race.hazards || []).some(h => h.kind === 'timeslow' && h.owner !== car && !h.bounced?.has(car))) return 'timeslow';
+      if (rivals.some(c => armed(c, 'magnet') && magnetTarget(race, c) === car)) return 'magnet armed';
+      if (rivals.some(c => armed(c, 'timeslow') && gap(c) < 0 && gap(c) > -60)) return 'timeslow armed';
+      if (rivals.some(c => (armed(c, 'oil') || armed(c, 'facewall')) && gap(c) > 3 && gap(c) < 30)) return 'trap armed';
+      return near(15).length >= 2 && 'crowd';
     }
-    case 'timeslow': return rivals.some(c => gap(c) > 0 && gap(c) < 60) && 'ahead';
+    case 'timeslow': return rivals.some(c => gap(c) > 0 && gap(c) < 60) && !rivals.some(mirrorOn) && 'ahead';
     case 'phase': return (road.straight > 120 || rivals.some(c => gap(c) > 0 && gap(c) < 20)) && 'through';
     case 'robotdash': return near(10).length > 0 && 'close';
     case 'facewall': return faceWanted(race, car) && 'behind';
@@ -1436,14 +1589,16 @@ export function faceWall(race) {
     const lo = faceEdge(on.lateral, hz.pairs, hz.lim, -1), hi = faceEdge(on.lateral, hz.pairs, hz.lim, 1);
     for (const c of race.cars) {
       if (c === o || c.control === 'net' || c.finished || c._?.left || c.mods?.invulnerable || c.mods?.noCollide) continue;
-      const n = tr.nearest(c.pos, c.trackIndex);
+      const n = tr.nearest(c.pos, c.trackIndex), min = FACE.min + halfLen(c) - 2.1;   // a longer car: held by its own nose
       if (n.lateral < lo || n.lateral > hi) continue;
       // the faces stand on a straight line across the road through the owner: measure (and push) square to that line,
       // not along the centreline, which in a corner is far shorter on the inside than on the outside
       const behind = (((on.t - n.t) % 1 + 1.5) % 1 - 0.5) * tr.length;   // m behind the owner along the track
       const gap = (o.pos.x - c.pos.x) * fx + (o.pos.z - c.pos.z) * fz;
-      if (behind < 0 || behind > 15 || gap < 0 || gap >= FACE.min) continue;
-      const push = Math.min(FACE.min - gap, FACE.push);
+      if (behind < 0 || behind > 15 || gap < 0 || gap >= min) continue;
+      if (hz.bounced?.has(c)) continue;   // reflected once: this wall leaves it alone from then on
+      if (mirrorOn(c)) { (hz.bounced ||= new Set()).add(c); reflects(race, c, o, 'facewall'); continue; }   // drives through; the owner is held back
+      const push = Math.min(min - gap, FACE.push);
       c.pos.x -= fx * push; c.pos.z -= fz * push;
       // the row turns with the owner: at the car's offset from it, it moves at speed × (1 + curv × offset)
       const cap = Math.max(0, (o.speed || 0) * Math.max(0.3, 1 + curv * (n.lateral - on.lateral)) - FACE.slower);
@@ -1504,7 +1659,7 @@ function start(race, car, id, dur, pow, pose, target = null) {
       if (car.control !== 'net') car.spin = 0;   // shakes off a spin in progress
     }
   }
-  if (id === 'thunderbolt') strike(race, S, target, pow);
+  if (id === 'thunderbolt') strike(race, S, target, pow, car);
   const c = PAL[id];
   if (id !== 'oil') burst(S.glow, _w.copy(at).setY(at.y + 0.8), 36, c, 7, 0.5, 0.5, 0.05, 0, 2.5);
   if (id !== 'timeslow') ring(S, _w.copy(at).setY(at.y + 0.15), COLOR[id], { r0: 1.5, r1: 6, life: 0.4, opacity: 0.8 });
@@ -1738,6 +1893,7 @@ export function initAbility(race, car) {
     id, name: ABILITIES[id].name, gauge: 0, active: 0, activeMax: 0, power: 0, t: 0,
     slow: 0, slowVis: 0, hit: 0, fx: null, phaseSwap: null, target: null, sealed: false, domVis: 0,
     dfVis: 0, robot: null, body: null, robotDur: 0, robotPh: 0, chained: false, chainFx: null, dive: null, away: false,
+    bounceP: 0, bounceT: 0,   // a slow bounced back onto this car by a reflector: power, s left
   };
   car.spin ??= 0;
   if (id === 'robotdash') attachRobot(car);
@@ -1750,8 +1906,19 @@ export function initAbility(race, car) {
 // car–car contact (game.js collide, after the usual response): a robot sends the other car flying sideways.
 // Only this client's own cars: a remote victim's own client does it when its car meets the robot there.
 // Shielded cars are immune; phase cars never touch.
+// (Also the contact hook for reflect: a glint on the mirrors; a robot's knock on a reflecting car fizzles, the robot is immune.)
 export function robotKnock(race, a, b) {
   for (const [r, v] of [[a, b], [b, a]]) {
+    if (mirrorOn(v) && v.control !== 'net') {
+      const S = st(race), va = v.ability;
+      if (S.time - (va.glintAt ?? -9) > 0.4) {
+        va.glintAt = S.time;
+        va.hit = 1;
+        glowBall(S, _w.set((r.pos.x + v.pos.x) / 2, v.pos.y + 1.2, (r.pos.z + v.pos.z) / 2), 1.6, 0.18, '#ffffff');
+        if (isRobot(r)) reflects(race, v, r, 'robotdash');
+      }
+      continue;
+    }
     if (!isRobot(r) || isRobot(v) || v.control === 'net' || v.mods?.invulnerable) continue;
     const va = v.ability || initAbility(race, v), S = st(race);
     if (S.time - (va.knockAt ?? -9) < KNOCK.again) continue;
@@ -1778,6 +1945,7 @@ export function updateAbilities(race, dt) {
   for (const car of race.cars) {
     const a = car.ability || initAbility(race, car);
     if (car.spin > 0) car.spin = Math.max(0, car.spin - dt);
+    if (a.bounceT > 0) a.bounceT = Math.max(0, a.bounceT - dt);   // a reflected slow
     if (a.active > 0) {
       a.t += dt;
       if (a.dive) diveStep(race, S, car, dt);   // may end it (came back)
@@ -1797,11 +1965,17 @@ export function updateAbilities(race, dt) {
     if (a.id === 'facewall' && car.control === 'cpu') car.input.ability = a.gauge >= 1 && !(a.active > 0) && faceWanted(race, car);
   }
 
-  // timeslow: strongest field not owned by the car; shield ignores it
+  // timeslow: strongest field not owned by the car; shield ignores it; a reflecting car bounces it onto its owner (and is
+  // free of that field from then on). + a slow bounced back onto this car by a reflector (bounce())
   for (const car of race.cars) {
     let p = 0;
-    for (const hz of race.hazards) if (hz.kind === 'timeslow' && hz.owner !== car) p = Math.max(p, hz.power);
+    for (const hz of race.hazards) {
+      if (hz.kind !== 'timeslow' || hz.owner === car || hz.bounced?.has(car)) continue;
+      if (reflects(race, car, hz.owner, 'timeslow', { pow: hz.power, left: hz.left })) { (hz.bounced ||= new Set()).add(car); continue; }
+      p = Math.max(p, hz.power);
+    }
     if (car.mods?.invulnerable || away(car)) p = 0;
+    if (car.ability.bounceT > 0) p = Math.max(p, car.ability.bounceP);
     car.ability.slow = p;
     if (p && car.mods) car.mods.speedMul *= Math.max(0, 1 - p);
   }
@@ -1812,6 +1986,7 @@ export function updateAbilities(race, dt) {
   for (const car of race.cars) {
     const a = car.ability, tg = a.chained && a.t >= HELL.hook ? a.target : null;
     if (!tg || tg.control === 'net' || tg.finished || !tg.mods || chainProof(tg)) continue;
+    if (reflects(race, tg, car, 'hellchain')) continue;   // snapped back (bounce() released it)
     const was = held.has(tg) || S.held?.has(tg);   // already on a chain: no second alarm
     held.set(tg, Math.max(held.get(tg) || 0, Math.min(HELL.maxDrag, a.power)));
     if (!isHuman(tg) || a.hookFlash) continue;
@@ -1827,6 +2002,12 @@ export function updateAbilities(race, dt) {
   }
   S.held = held;
 
+  // magnet: a pull aimed at a reflecting car is repelled (only the target's own client: reflects() checks)
+  for (const car of race.cars) {
+    const a = car.ability;
+    if (a.id === 'magnet' && a.active > 0 && a.target) reflects(race, a.target, car, 'magnet');
+  }
+
   // domain: other cars inside a live dome are slowed and sealed (gauge frozen, can't activate); shield ignores it.
   // Only this client's own cars: a remote car's own client applies it there.
   for (const car of race.cars) {
@@ -1834,7 +2015,10 @@ export function updateAbilities(race, dt) {
     let p = 0;
     if (car.control !== 'net' && !car.finished && !car.mods?.invulnerable) {
       for (const hz of race.hazards) {
-        if (hz.kind === 'domain' && hz.on && hz.owner !== car && car.pos.distanceToSquared(hz.center) < DOMAIN_R * DOMAIN_R) p = Math.max(p, Math.min(DOMAIN_MAX_SLOW, hz.power));
+        if (hz.kind !== 'domain' || !hz.on || hz.owner === car || hz.bounced?.has(car) || car.pos.distanceToSquared(hz.center) >= DOMAIN_R * DOMAIN_R) continue;
+        // a reflecting car inside: the dome's slow goes to its owner, and this dome leaves the car alone from then on
+        if (reflects(race, car, hz.owner, 'domain', { pow: hz.power, left: hz.life - hz.age })) { (hz.bounced ||= new Set()).add(car); continue; }
+        p = Math.max(p, Math.min(DOMAIN_MAX_SLOW, hz.power));
       }
     }
     if (p) {
@@ -1916,11 +2100,22 @@ export function applyRemoteAbility(race, msg) {
   if (!def || !race.scene || race.state !== 'running') return;
   const car = race.cars.find(c => c.pid != null && c.pid === msg.pid) || null;
   if (car && !car.ability) initAbility(race, car);
-  if (msg.rel) {   // hellchain: the owner's chain snapped
-    if (car?.ability.chained) chainRelease(race, car, car.ability, !chainProof(car.ability.target));
+  if (msg.rel) {   // hellchain: the owner's chain snapped (b: a reflector bounced it: no slingshot / whip here either)
+    const a = car?.ability;
+    if (a?.chained && !reflects(race, a.target, car, 'hellchain')) chainRelease(race, car, a, !msg.b && !chainProof(a.target), !!msg.b);
     return;
   }
   const num = (v, d) => (Number.isFinite(v) ? v : d);
+  if (msg.id === 'reflect' && msg.ref != null) {   // car reflected an attack by tp: the bounce (applied here if tp is ours)
+    const S = st(race), key = `${msg.pid}:${msg.n}`;
+    if (!Object.hasOwn(REFLECT, String(msg.ref)) || !Number.isFinite(msg.n) || (S.refSeen ||= new Set()).has(key)) return;
+    S.refSeen.add(key);
+    const src = race.cars.find(c => c.pid != null && String(c.pid) === String(msg.tp)) || null;
+    const e = { spin: clamp(num(msg.sp, 0), 0, BOUNCE_MAX.spin), slow: clamp(num(msg.sl, 0), 0, BOUNCE_MAX.slow), slowT: clamp(num(msg.st, 0), 0, BOUNCE_MAX.slowT), end: REFLECT[msg.ref]({ pow: 0, left: 0 }, 1).end };
+    const at = Number.isFinite(msg.ox) && Number.isFinite(msg.oz) ? { x: msg.ox, z: msg.oz } : null;
+    bounce(race, S, car, src, String(msg.ref), e, at, car?.pos || { x: num(msg.x, 0), y: num(msg.y, 0), z: num(msg.z, 0) });
+    return;
+  }
   // peer data is untrusted: cap at 2x base (skill tree max is +25%)
   const dur = clamp(num(msg.dur, def.duration * (car?.stats?.abilityDuration || 1)), 0, def.duration * 2);
   const pow = clamp(num(msg.pow, def.power * (car?.stats?.abilityPower || 1)), 0, def.power * 2);
@@ -1974,7 +2169,7 @@ export function clearAbilities(race) {
     a.gone = true;   // a robot still loading must not attach any more
     if (a.body) { a.body.visible = true; a.body.scale.setScalar(1); a.body.rotation.y = 0; }
     if (a.robot) a.robot.visible = false;   // stays under the car mesh: stopRace disposes it with the scene
-    a.active = a.slow = a.slowVis = a.domVis = a.dfVis = a.robotPh = 0;
+    a.active = a.slow = a.slowVis = a.domVis = a.dfVis = a.robotPh = a.bounceT = 0;
     a.sealed = a.away = false;
     a.target = a.dive = null;
     if (car._) { car._.away = false; car._.track = null; }

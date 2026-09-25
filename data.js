@@ -27,6 +27,7 @@ export const ABILITIES = {
   hellchain: { name: 'ヘルチェーン', desc: '150m先まで届く炎の鎖で前の車を捕まえ、5秒間引き寄せる。外れる瞬間に相手を振り回してスピンさせ、一気に追い抜く', fill: 18, duration: 5, power: 0.5 }, // duration = chain s, power = target slow (max 0.6) / tow up to target speed +25% x power
   facewall: { name: 'フェイス・ウォール', desc: '左右に顔がどんどん増えて横一列に並び、回転しながら道をふさぐ。後ろの車は前に出られない', fill: 24, duration: 5, power: 1 }, // duration = wall time; power unused
   tokyodive: { name: 'トーキョー・ダイブ', desc: 'ネオンのゲートから夜の東京の異空間へ6秒間ダイブ。戻ると大きく前方へ飛び出し、異空間で走った距離の分だけさらに前へ', fill: 26, duration: 6, power: 1 }, // power = multiplier on the jump's pocket part (abilities.js DIVE)
+  reflect: { name: 'リフレクト', desc: 'ボディの鏡が光り、4秒間 自分を狙った攻撃をぜんぶ撃った相手にはね返す（ぶつかられても減速しない）', fill: 22, duration: 4, power: 1 }, // power = strength of what bounces back (x the attack's own; abilities.js REFLECT)
 };
 
 // Passive traits (R cars).
@@ -52,6 +53,8 @@ export const CARS = [
   { id: 'sr_oil',   name: 'スリック・ヴァイパー', rarity: 'SR', body: 'wedge', color: '#38b000', ability: 'oil',   passive: null,     base: { top: 64, accel: 19, grip: 0.86, steer: 2.2, mass: 1.0 } },
   { id: 'sr_magnet', name: 'マグネ・ビートル', rarity: 'SR', body: 'wedge', color: '#1fa7a0', ability: 'magnet', passive: null, base: { top: 65, accel: 20, grip: 0.87, steer: 2.2, mass: 1.1 } },
   { id: 'sr_shield',name: 'アイアン・ブルワーク', rarity: 'SR', body: 'tank',  color: '#6c757d', ability: 'shield',passive: null,     base: { top: 62, accel: 18, grip: 0.84, steer: 2.0, mass: 1.8 } },
+  // len / w: a box truck 6 m long, 2.3 m wide (carmodel.js fit + trimWidth, game.js collision circles + chase camera); the rest are 4.2 m
+  { id: 'sr_mirror', name: 'リフレクト号', rarity: 'SR', body: 'truck', color: '#ffffff', ability: 'reflect', passive: null, len: 6, w: 2.3, base: { top: 64, accel: 17, grip: 0.84, steer: 2.0, mass: 2.0 } },
   { id: 'ur_warp',  name: 'ディメンション・シャーク', rarity: 'UR', body: 'shark', color: '#4cc9f0', ability: 'warp', passive: null, base: { top: 70, accel: 21, grip: 0.90, steer: 2.3, mass: 1.1 } },
   { id: 'ur_time',  name: 'クロノ・ドラゴン',  rarity: 'UR', body: 'dragon',  color: '#7b2cbf', ability: 'timeslow', passive: null, base: { top: 69, accel: 21, grip: 0.90, steer: 2.3, mass: 1.2 } },
   { id: 'ur_phase', name: 'スシ・ファントム',  rarity: 'UR', body: 'sushi',   color: '#ff8fa3', ability: 'phase', passive: null,    base: { top: 71, accel: 20, grip: 0.89, steer: 2.4, mass: 1.0 } },

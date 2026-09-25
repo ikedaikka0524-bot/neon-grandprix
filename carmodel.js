@@ -36,10 +36,36 @@ function loadGLB(carId) {
   if (!glbCache.has(carId)) {
     glbCache.set(carId, fetchGLB(`models/${carId}.glb`).then(m => {
       if (m === undefined) glbCache.delete(carId);   // network trouble: try again next race instead of a procedural car all session
+      if (m && CAR_BY_ID[carId]?.w) try { trimWidth(m, CAR_BY_ID[carId]); } catch (e) { console.warn('trimWidth', carId, e); }
       return m ?? null;
     }));
   }
   return glbCache.get(carId);
+}
+
+// def.w (m): anything sticking out sideways past the body (Meshy's open door / awning on the truck) is pressed flat onto
+// its sides: every vertex's lateral coordinate is clamped to the median ± w/2 (at the def.len scale). Once per loaded model.
+function trimWidth(root, def) {
+  root.updateMatrixWorld(true);
+  const s = new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3()), k = s.x < s.z ? 'x' : 'z';
+  const half = def.w / 2 * Math.max(s.x, s.z) / (def.len || CAR_LEN), v = new THREE.Vector3(), inv = new THREE.Matrix4(), meshes = [], all = [];
+  root.traverse(o => { if (o.isMesh && o.geometry?.attributes?.position) meshes.push(o); });
+  for (const o of meshes) { const p = o.geometry.attributes.position; for (let i = 0; i < p.count; i++) all.push(v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld)[k]); }
+  all.sort((a, b) => a - b);
+  const mid = all[all.length >> 1];
+  for (const o of meshes) {
+    const p = o.geometry.attributes.position;
+    inv.copy(o.matrixWorld).invert();
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld);
+      v[k] = Math.min(mid + half, Math.max(mid - half, v[k]));
+      v.applyMatrix4(inv);
+      p.setXYZ(i, v.x, v.y, v.z);
+    }
+    p.needsUpdate = true;
+    o.geometry.computeBoundingBox();
+    o.geometry.computeBoundingSphere();
+  }
 }
 
 export async function preloadCarModels(carIds) {
@@ -82,7 +108,7 @@ function fitClone(src, fit) {
 }
 
 function fromGLB(src, def, look) {
-  const { model, inner } = fitClone(src, s => Math.min(CAR_LEN / Math.max(s.x, s.z, 1e-6), CAR_MAX_W / Math.max(Math.min(s.x, s.z), 1e-6)));
+  const { model, inner } = fitClone(src, s => Math.min((def.len || CAR_LEN) / Math.max(s.x, s.z, 1e-6), (def.w || CAR_MAX_W) / Math.max(Math.min(s.x, s.z), 1e-6)));
   const pivot = new THREE.Group();
   pivot.rotation.y = def.modelRot || 0;
   pivot.add(inner);
@@ -846,6 +872,41 @@ const BUILDERS = {
     roundLight(s, m.tail, 0.6, 0.78, -2.01, 0.2, true);
     wheels4(g, m, { fz: 1.35, rz: -1.35, r: 0.34, w: 0.26, track: 1.0 });
     return { wing: [-1.6, 1.3], wingW: 1.7 };
+  },
+
+  // sr_mirror (def.len 6 m): cab-over light truck + a tall box whose side panels are one-way mirrors
+  truck(g, s, m) {
+    const mirror = new THREE.MeshStandardMaterial({ color: 0xe4edf6, metalness: 1, roughness: 0.04 });
+    const amber = new THREE.MeshStandardMaterial({ color: 0xffb040, emissive: 0xff8a00, emissiveIntensity: 1.4, roughness: 0.3 });
+    const cab = [[3.0, 0.58], [3.03, 1.32], [2.98, 2.42], [2.84, 2.58], [1.62, 2.58], [1.55, 2.42], [1.55, 0.58]];
+    add(s, extrude(sideShape(cab, 0.58, [{ z: 2.0, cy: 0.47, R: 0.6 }]), 2.2, 0.08), m.body);
+    add(s, box(1.96, 0.8, 0.04), m.glass, 0, 1.98, 3.1).rotation.x = -0.05;                      // windshield (the bevel puts the face at ~3.1)
+    pair(s, box(0.03, 0.62, 0.74), m.glass, 1.105, 2.0, 2.4);                                 // side windows
+    pair(s, box(0.02, 1.25, 0.03), m.trim, 1.105, 1.35, 1.78);                                // door gaps
+    add(s, box(1.5, 0.36, 0.04), m.black, 0, 1.08, 3.12);                                     // grille
+    for (const y of [0.99, 1.08, 1.17]) add(s, box(1.44, 0.03, 0.02), m.chrome, 0, y, 3.145);
+    pair(s, box(0.36, 0.2, 0.05), m.head, 0.8, 0.96, 3.12);
+    add(s, box(2.26, 0.26, 0.24), m.trim, 0, 0.52, 3.05);                                     // bumper
+    pair(s, box(0.06, 0.06, 0.4), m.trim, 1.2, 2.2, 2.78);                                    // mirror arms + heads
+    pair(s, box(0.1, 0.44, 0.22), m.black, 1.28, 2.04, 2.8);
+    for (const x of [-0.5, 0, 0.5]) add(s, box(0.16, 0.06, 0.06), amber, x, 2.66, 2.9);       // roof markers
+    add(s, box(1.2, 0.3, 5.3), m.trim, 0, 0.78, -0.2);                                        // chassis
+    add(s, new THREE.CylinderGeometry(0.26, 0.26, 0.8, 16).rotateX(Math.PI / 2), m.chrome, -0.82, 0.72, 0.55);   // fuel tank
+    pair(s, box(0.04, 0.12, 2.1), m.trim, 1.06, 0.78, 0.2);                                   // side guards
+    add(s, new RoundedBoxGeometry(2.3, 2.05, 4.45, 2, 0.05), m.body, 0, 1.98, -0.77);          // the box: y 0.95..3.0, z -3.0..1.45
+    pair(s, box(0.02, 1.62, 3.95), mirror, 1.16, 1.98, -0.8);                                 // one-way mirror side panels
+    for (const y of [1.15, 2.81]) pair(s, box(0.035, 0.07, 4.05), m.chrome, 1.165, y, -0.8);
+    for (const z of [1.18, -2.78]) pair(s, box(0.035, 1.7, 0.07), m.chrome, 1.165, 1.98, z);
+    add(s, box(0.03, 1.95, 0.02), m.trim, 0, 1.98, -3.015);                                   // rear doors
+    pair(s, box(0.05, 1.85, 0.05), m.chrome, 0.5, 1.98, -3.03);
+    pair(s, box(0.22, 0.32, 0.06), m.tail, 0.95, 1.2, -3.02);
+    pair(s, box(0.12, 0.08, 0.04), amber, 1.0, 2.9, -3.02);
+    add(s, box(2.2, 0.2, 0.18), m.trim, 0, 0.58, -2.95);                                      // rear bumper, plate, mud flaps
+    add(s, box(0.5, 0.14, 0.03), m.white, 0, 0.62, -3.05);
+    pair(s, box(0.42, 0.42, 0.03), m.black, 0.82, 0.4, -2.3);
+    addWheel(g, m, 0.93, 2.0, 0.46, 0.3, true); addWheel(g, m, -0.93, 2.0, 0.46, 0.3, true);
+    addWheel(g, m, 0.9, -1.6, 0.46, 0.4, false); addWheel(g, m, -0.9, -1.6, 0.46, 0.4, false);
+    return { wing: [-2.7, 3.0], wingW: 2.0 };
   },
 
   // ur_megaface fallback (keyed by car id): a big egg-shaped cartoon head, face at the front, on four spoked wheels

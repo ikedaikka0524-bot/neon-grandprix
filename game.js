@@ -4,7 +4,7 @@ import { CARS, CAR_BY_ID, ABILITIES, SKILL_TREE, DIFFICULTY_BY_ID, computeStats 
 import { TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
 import { buildCarMesh } from './carmodel.js';
 import { buildWorld } from './world.js';
-import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities, robotKnock, faceWall, netAway, cpuAbility } from './abilities.js';
+import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities, robotKnock, faceWall, netAway, cpuAbility, mirrorBlocks } from './abilities.js';
 import { createRecorder, createGhostPlayer } from './ghost.js';
 import { netSample, ageOf, predict, newOffset, applyOffset, retarget, decay } from './netpredict.js';
 import { createTouch, keepAwake, isPhone } from './touch.js';
@@ -28,8 +28,9 @@ function fmtTime(s) {
 
 // downforce: ability power (0 = off): grip 0.99 whatever the course, no drift / lateral slip / cornering scrub, more steering
 // tow / towV (hellchain): pulled forward at tow m/s^2, throttle or not, but never past towV m/s (abilities.js zeroes it
-// under brakes / spin / off-road). assist: steering assist (-1..1) blended into a player's own steer
-const MODS0 = Object.freeze({ speedMul: 1, accelMul: 1, gripMul: 1, noCollide: false, noOffroadPenalty: false, invulnerable: false, downforce: 0, tow: 0, towV: 0, assist: 0 });
+// under brakes / spin / off-road). assist: steering assist (-1..1) blended into a player's own steer. reflect: loses no
+// speed in car-car contact (like a shield) and the other car bounces off harder
+const MODS0 = Object.freeze({ speedMul: 1, accelMul: 1, gripMul: 1, noCollide: false, noOffroadPenalty: false, invulnerable: false, downforce: 0, tow: 0, towV: 0, assist: 0, reflect: false });
 const CPU_NAMES = ['ハヤテ', 'ミズキ', 'ライデン', 'サクラ', 'ゴンタ', 'ツバサ', 'カエデ', 'レン', 'ヒカル', 'シズク'];
 const KEYSETS = {
   single: { up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'], ability: ['Space', 'ShiftLeft', 'ShiftRight'], reset: ['KeyR'], label: 'SPACE' },
@@ -297,6 +298,13 @@ function buildEntries(opts, mode, lv) {
   return { list: [...players, ...cpus], grid: [...cpus, ...players] };  // solo: player starts at the back
 }
 
+// collision footprint: circles of radius r at these offsets along the heading (a 4.2 m car: two; a longer def.len: three)
+function hitShape(def) {
+  if (!def?.len) return { r: 1, off: [-1.05, 1.05], reach: 2.05 };
+  const r = 1.15, f = def.len / 2 - r;
+  return { r, off: [-f, 0, f], reach: f + r };
+}
+
 function makeCar(index, e, mesh) {
   mesh.rotation.order = 'YXZ';
   return {
@@ -313,6 +321,7 @@ function makeCar(index, e, mesh) {
       t: 0, prevT: null, crossings: 0, halfway: true, lapStart: 0, lastLap: null, pitch: 0, acc: 0, rollS: 0,
       spinVis: 0, spinTot: 0, lastSpin: 0, spinSteer: 0, spinSteerT: 0,
       lane: 0, laneTarget: 0, laneT: 0, passT: 0, stuck: 0, abilDelay: null, wrong: 0, net: null, off: newOffset(), left: false,
+      hit: hitShape(CAR_BY_ID[e.carId]),
       // an ability's own space (tokyodive): away = out of the race world (progress frozen, no AI); track = the course
       // a driver is on meanwhile; jump = lap fraction it came back ahead by (updateProgress counts what it skipped)
       away: false, track: null, jump: 0,
@@ -685,9 +694,18 @@ function makeView(ctx, car, keys, idx, total) {
     <canvas class="rg-map"></canvas>`;
   const q = s => d.querySelector(s);
   const map = q('.rg-map');
+  // a longer / taller vehicle (def.len: the 6 m truck): the chase camera sits farther back and higher, and looks over its roof
+  let big = { back: 0, up: 0, look: 0 };
+  if (car.def?.len) {
+    const r = car.mesh.rotation.clone();   // height in its own frame (it already sits on the grid, pitched)
+    car.mesh.rotation.set(0, 0, 0);
+    const up = Math.max(0, new THREE.Box3().setFromObject(car.mesh).max.y - car.mesh.position.y - 1.5);
+    car.mesh.rotation.copy(r);
+    big = { back: Math.max(0, car.def.len - 4.2) * 1.4, up: up * 1.1, look: up * 0.6 };
+  }
   map.width = map.height = Math.round(180 * Math.min(window.devicePixelRatio || 1, 2));
   return {
-    car, keys, camera, camPos, camH: car.heading, fov: 62, shake: 0, tmp: new THREE.Vector3(),
+    car, keys, camera, camPos, camH: car.heading, fov: 62, shake: 0, tmp: new THREE.Vector3(), big,
     engine: ctx.audio?.engine(),
     hud: {
       root: d, pos: q('.rg-pos'), lap: q('.rg-lap'), time: q('.rg-time'), cur: q('.rg-cur'), best: q('.rg-best'), ghost: q('.rg-ghost'),
@@ -1067,7 +1085,7 @@ function aiInput(ctx, car, dt) {
       c.abilDelay = (c.abilDelay ?? 0) + dt;
       // (not a warp: a straight isn't enough, it needs room to brake after the jump)
       const why = cpuAbility(race, car, { straight: c.straight, corner: c.corner, room: c.room })
-        || (c.abilDelay > lv.hold && c.straight > 60 && ab.id !== 'oil' && ab.id !== 'warp' && 'hold');
+        || (c.abilDelay > lv.hold && c.straight > 60 && !['oil', 'warp', 'reflect'].includes(ab.id) && !mirrorBlocks(race, ab.id) && 'hold');   // reflect: useless unless attacked
       if (why) { inp.ability = true; c.abilDelay = null; c.abilWhy = why; }
     } else {
       if (c.abilDelay == null) c.abilDelay = lv.tactics === 'late' ? 4 + Math.random() * 8 : Math.random() * 4;
@@ -1217,16 +1235,19 @@ function collide(ctx) {
   for (let i = 0; i < cars.length; i++) for (let j = i + 1; j < cars.length; j++) {
     const a = cars[i], b = cars[j];
     if ((a.control === 'net' && b.control === 'net') || !solid(a) || !solid(b)) continue;
-    if ((b.pos.x - a.pos.x) ** 2 + (b.pos.z - a.pos.z) ** 2 > 30) continue;
+    const ha = a._.hit, hb = b._.hit;
+    if ((b.pos.x - a.pos.x) ** 2 + (b.pos.z - a.pos.z) ** 2 > (ha.reach + hb.reach) ** 2) continue;
     let best = null;
     const afx = Math.sin(a.heading), afz = Math.cos(a.heading), bfx = Math.sin(b.heading), bfz = Math.cos(b.heading);
-    for (const oa of [-1.05, 1.05]) for (const ob of [-1.05, 1.05]) {
+    for (const oa of ha.off) for (const ob of hb.off) {
       const ax = a.pos.x + afx * oa, az = a.pos.z + afz * oa, bx = b.pos.x + bfx * ob, bz = b.pos.z + bfz * ob;
-      const dx = bx - ax, dz = bz - az, d = Math.hypot(dx, dz), pen = 2.0 - d;
+      const dx = bx - ax, dz = bz - az, d = Math.hypot(dx, dz), pen = ha.r + hb.r - d;
       if (pen > 0 && (!best || pen > best.pen)) best = { pen, nx: d > 1e-4 ? dx / d : 1, nz: d > 1e-4 ? dz / d : 0, x: (ax + bx) / 2, z: (az + bz) / 2 };
     }
     if (!best) continue;
-    const shieldA = a.mods.invulnerable && !b.mods.invulnerable, shieldB = b.mods.invulnerable && !a.mods.invulnerable;
+    // a reflecting car (abilities.js reflect) keeps its speed like a shielded one, and the other car bounces off harder
+    const ga = a.mods.invulnerable || a.mods.reflect, gb = b.mods.invulnerable || b.mods.reflect;
+    const shieldA = ga && !gb, shieldB = gb && !ga;
     const ma = a.control === 'net' ? 0 : 1 / (a.stats.mass || 1), mb = b.control === 'net' ? 0 : 1 / (b.stats.mass || 1);
     const ia = shieldA ? 0 : ma, ib = shieldB ? 0 : mb;   // impulse: a shielded car loses no speed
     // Position: a shield shoves the other car aside, but a remote car can't be moved here (its own screen does the
@@ -1237,7 +1258,7 @@ function collide(ctx) {
     b.pos.x += best.nx * best.pen * wb; b.pos.z += best.nz * best.pen * wb;
     const vrel = (b.vel.x - a.vel.x) * best.nx + (b.vel.z - a.vel.z) * best.nz;
     if (vrel < 0 && ia + ib) {
-      const jimp = -1.3 * vrel / (ia + ib);
+      const jimp = -(a.mods.reflect || b.mods.reflect ? 1.8 : 1.3) * vrel / (ia + ib);
       a.vel.x -= best.nx * jimp * ia; a.vel.z -= best.nz * jimp * ia;
       b.vel.x += best.nx * jimp * ib; b.vel.z += best.nz * jimp * ib;
       if (-vrel > 2.5) impact(ctx, best.x, (a.pos.y + b.pos.y) / 2 + 0.5, best.z, -vrel, [a, b]);
@@ -1687,7 +1708,7 @@ function updateViews(ctx, dt) {
     const car = v.car, c = car._, cam = v.camera, spd = Math.abs(car.speed);
     let targetH = car.heading;
     if (spd > 4 && car.speed > 0) targetH = car.heading + wrapAngle(Math.atan2(car.vel.x, car.vel.z) - car.heading) * 0.55;
-    let dist = 7.4 + Math.min(spd, 80) * 0.028, height = 2.7 + Math.min(spd, 80) * 0.006;
+    let dist = 7.4 + v.big.back + Math.min(spd, 80) * 0.028, height = 2.7 + v.big.up + Math.min(spd, 80) * 0.006;
     if (cam.aspect < 0.8) height += 1.3;   // portrait: look down a little more, the tall view shows more road than sky
     if (race.state === 'countdown') { const k = smooth(0, 3.9, ctx.count); targetH += k * 2.6; dist += k * 5; height += k * 2.5; }
     if (v.camPos.distanceToSquared(car.pos) > 1600) v.camH = targetH;   // teleported: the cut below also faces the way it goes
@@ -1700,7 +1721,7 @@ function updateViews(ctx, dt) {
     v.shake *= Math.exp(-7 * dt);
     const sh = (v.shake + (car.offroad ? Math.min(spd, 40) * 0.0025 : 0)) * (dt > 0 ? 1 : 0);
     cam.position.set(v.camPos.x + (Math.random() - 0.5) * sh, v.camPos.y + (Math.random() - 0.5) * sh, v.camPos.z + (Math.random() - 0.5) * sh);
-    cam.lookAt(car.pos.x + fx * 5, car.pos.y + 1.2, car.pos.z + fz * 5);
+    cam.lookAt(car.pos.x + fx * 5, car.pos.y + 1.2 + v.big.look, car.pos.z + fz * 5);
     const boosting = car.mods.speedMul > 1.02 || c.turbo > 0;
     const fov = 62 + Math.min(spd, 85) / 85 * 16 + (boosting ? 8 : 0);
     v.fov += (fov - v.fov) * damp(4, dt);

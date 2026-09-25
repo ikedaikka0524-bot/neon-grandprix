@@ -215,6 +215,7 @@ class Stage {
       if (sil) { for (const x of [].concat(o.material)) x.dispose(); o.material = SIL; }
     });
     if (this.car) { this.table.remove(this.car); dispose(this.car); }
+    m.scale.setScalar(fitScale(carId));
     this.table.add(this.car = m);
     if (newCar) this.pop = 0;
   }
@@ -242,6 +243,7 @@ class Stage {
   }
 }
 const S1 = new Stage(), S2 = new Stage(), TS = new Stage(true);
+const fitScale = carId => 4.2 / (CAR_BY_ID[carId]?.len || 4.2);   // a longer vehicle (the 6 m truck) shown at car size on the stage
 
 function mount(slot, stages = [], spin = 0.5) {
   PV.slot = slot; PV.stages = stages; PV.w = 0;
@@ -283,6 +285,7 @@ async function pumpThumbs() {
         const m = await buildCarMesh(j.carId, j.look);
         while (race) await sleep(500);
         m.traverse(o => { if (o.isMesh) o.castShadow = true; });
+        m.scale.setScalar(fitScale(j.carId));
         TS.table.add(m);
         TS.accent(rColor(j.carId));
         const r = PV.r, W = 260, H = 160;

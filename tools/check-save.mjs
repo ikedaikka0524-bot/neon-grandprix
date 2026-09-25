@@ -26,4 +26,16 @@ for (const [v, want] of [['oni', 'oni'], ['constructor', 'normal'], [undefined, 
   store.set('crg.save.v1', JSON.stringify(t));
   assert.equal(reloadSave({ key: 'crg.save.v1' }).lastCpuLevel, want);
 }
+// cloud save chooser: what differs between two saves (sync.js saveDiff), from a's side
+const { saveDiff } = await import('../sync.js');
+const A = JSON.parse(store.get('crg.save.v1')), B = JSON.parse(JSON.stringify(A));
+assert.deepEqual(saveDiff(A, B), []);
+B.coins -= 120; B.tickets += 1;
+B.cars.n_hatch.look.body = '#00ff00';
+A.cars.n_hatch.nodes = ['s1', 's2'];
+A.cars.n_hatch.best = { circuit: { lap: 30, race: 95 } };
+const d = saveDiff(A, B).map(x => x[0]);
+for (const t of ['コイン +120', 'チケット −1', 'ホットハッチ スキル+2', 'ホットハッチの色', 'ベスト記録 2件']) assert.ok(d.includes(t), `${t} in ${d}`);
+assert.equal(saveDiff(A, B).find(x => x[0] === 'ホットハッチの色')[1], A.cars.n_hatch.look.body);
+assert.ok(saveDiff(B, A).map(x => x[0]).includes('ホットハッチ スキル−2'));
 console.log('save ok');

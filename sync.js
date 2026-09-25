@@ -53,6 +53,36 @@ const when = t => { if (!t) return '—'; const d = new Date(t); return `${d.get
 const ago = t => { const m = (serverNow() - t) / 60000; return !t ? '' : m < 2 ? 'たった今' : m < 60 ? `${m | 0}分前` : m < 2880 ? `${m / 60 | 0}時間前` : `${m / 1440 | 0}日前`; };
 const sum = s => `コイン ${s.coins.toLocaleString()}・チケット ${s.tickets.toLocaleString()}・車 ${carsOf(s)}台`;
 
+// What save a has that b doesn't, short (the chooser: coins / cars can match while paint or skills differ).
+// [text, swatch colour | null]. Node-safe (tools/check-save.mjs).
+export function saveDiff(a, b) {
+  const out = [], sg = n => (n > 0 ? '+' : '−') + Math.abs(n).toLocaleString(), known = id => Object.hasOwn(CAR_BY_ID, id);
+  const num = (x, k) => (Number.isFinite(x?.[k]) ? x[k] : 0);
+  for (const [k, t] of [['coins', 'コイン'], ['tickets', 'チケット']]) if (num(a, k) !== num(b, k)) out.push([`${t} ${sg(num(a, k) - num(b, k))}`, null]);
+  if (num(a.stats, 'races') !== num(b.stats, 'races')) out.push([`レース ${sg(num(a.stats, 'races') - num(b.stats, 'races'))}回`, null]);
+  let recs = 0;
+  for (const id of Object.keys(a.cars).filter(known)) {
+    const x = a.cars[id] || {}, y = b.cars[id], n = CAR_BY_ID[id].name, col = /^#[0-9a-f]{6}$/i.test(x.look?.body) ? x.look.body : null;
+    if (!y) { out.push([`${n}を持っている`, null]); continue; }
+    const xn = Array.isArray(x.nodes) ? x.nodes : [], yn = Array.isArray(y.nodes) ? y.nodes : [];
+    if (xn.length !== yn.length) out.push([`${n} スキル${sg(xn.length - yn.length)}`, null]);
+    else if ([...xn].sort().join() !== [...yn].sort().join()) out.push([`${n}のスキル`, null]);
+    if (num(x, 'dupes') !== num(y, 'dupes')) out.push([`${n} 限界突破${sg(num(x, 'dupes') - num(y, 'dupes'))}`, null]);
+    const lx = x.look || {}, ly = y.look || {};
+    if (lx.body !== ly.body || lx.wheel !== ly.wheel) out.push([`${n}の色`, col]);
+    else if (!!lx.wing !== !!ly.wing) out.push([`${n}のウイング${lx.wing ? 'あり' : 'なし'}`, null]);
+    for (const [tid, r] of Object.entries(x.best || {})) {   // records this side holds that are better than the other's
+      const o = y.best?.[tid] || {};
+      for (const k of ['lap', 'race']) if (Number.isFinite(r?.[k]) && !(o[k] <= r[k])) recs++;
+    }
+  }
+  for (const id of Object.keys(b.cars).filter(known)) if (!Object.hasOwn(a.cars, id)) out.push([`${CAR_BY_ID[id].name}を持っていない`, null]);
+  if (recs) out.push([`ベスト記録 ${recs}件`, null]);
+  if (a.name !== b.name) out.push([`名前「${String(a.name).slice(0, 12)}」`, null]);
+  if (a.selected?.p1 !== b.selected?.p1 && known(String(a.selected?.p1))) out.push([`選んでいる車: ${CAR_BY_ID[a.selected.p1].name}`, null]);
+  return out;
+}
+
 function deviceLabel() {
   const ua = navigator.userAgent, touch = navigator.maxTouchPoints > 1;
   const os = /iPhone|iPod/.test(ua) ? 'iPhone' : /iPad/.test(ua) || (/Macintosh/.test(ua) && touch) ? 'iPad'
@@ -98,6 +128,12 @@ function listen(D, d, s) {
 }
 function unlisten() { S.subs?.forEach(off => off()); S.subs = null; S.members = null; }
 
+// a new state (offline / waiting / conflict / error) replaces what the status line said before (e.g. 'X が連携しました')
+function phase(p) {
+  if (p !== S.phase && p !== 'sync' && p !== 'ok') { S.msg = ''; S.err = false; }
+  S.phase = p;
+}
+
 /* ---------- the engine: one run at a time ---------- */
 let running = null, again = false, T = 0, idleT = 0;
 const schedule = ms => { clearTimeout(T); T = setTimeout(run, ms); };
@@ -123,7 +159,7 @@ function run() {
 function fail(e) {
   console.warn('sync', e);
   const m = String(e?.message);
-  S.phase = m === 'offline' ? 'offline' : 'error';
+  phase(m === 'offline' ? 'offline' : 'error');
   if (S.phase === 'error') S.msg = `⚠ ${m === 'too big' ? 'データが大きすぎて送れません' : m === 'bad cloud' ? 'クラウドのデータを読めませんでした'
     : m === 'no space' ? 'この端末に保存できませんでした（空き容量不足など）。データはそのままです' : 'つながりませんでした。あとで自動でやり直します'}`;
 }
@@ -131,8 +167,8 @@ function fail(e) {
 async function step() {
   const s = st();
   if (!s?.g || S.conflict) return;
-  if (!navigator.onLine) { S.phase = 'offline'; return; }
-  S.phase = 'sync';
+  if (!navigator.onLine) { phase('offline'); return; }
+  phase('sync');
   render();
   const { D, d, uid } = await db();
   if (uid !== s.uid) return lost();   // the anonymous sign-in is gone (storage cleared): not a member any more
@@ -162,7 +198,7 @@ async function step() {
   }
   if (st().dirty) await upload(D, d, st());
   set({ synced: Date.now() });
-  S.phase = 'ok';
+  phase('ok');
 }
 
 async function upload(D, d, s) {
@@ -179,13 +215,13 @@ async function upload(D, d, s) {
 // cloud → this device, never mid-race / mid-dialog: wait until the UI is idle. force = the player chose the cloud's in a
 // conflict (this device's data is the unchosen side). Throws 'no space' having changed nothing if a write fails.
 function apply(c, cs, force = false) {
-  if (!H.idle()) { S.phase = 'wait'; waitIdle(); return; }
+  if (!H.idle()) { phase('wait'); waitIdle(); return; }
   if (!force && st().dirty) return conflict(c, cs);
   const cur = getSave();
   if (!backupSave(force ? 'この端末のデータ（選ばなかった方）' : 'クラウドのデータを読み込む前', cur, !force)
     || !replaceSave({ ...cs, quality: cur.quality, sound: cur.sound })) throw new Error('no space');
   set({ rev: c.rev, h: fp(), dirty: false, sent: null, synced: Date.now() });
-  S.phase = 'ok';
+  phase('ok');
   H.applied();
   H.toast(`クラウドのデータを読み込みました（${String(c.by || '別の端末').slice(0, 24)}）`);
 }
@@ -199,7 +235,7 @@ function waitIdle() {
 }
 function conflict(c, cs) {
   S.conflict = { c, cs, shown: false };
-  S.phase = 'conflict';
+  phase('conflict');
   if (H.idle()) choose(); else waitIdle();
 }
 function lost() {
@@ -224,13 +260,17 @@ function choose() {
     el.addEventListener('click', e => { const b = e.target.closest('[data-sy]'); if (b) resolve(b.dataset.sy); });
   }
   const joined = !st()?.rev, me = getSave();
-  const side = (title, s, at, by, key) => `<div class="sync-side"><b>${title}</b><dl>`
+  const diff = (s, o) => {   // what this side has that the other doesn't: up to 6 chips
+    const d = saveDiff(s, o), chip = ([t, c]) => `<li>${esc(t)}${c ? `<i style="background:${c}"></i>` : ''}</li>`;
+    return `<ul class="sync-diff" aria-label="もう一方との違い">${d.length ? d.slice(0, 6).map(chip).join('') + (d.length > 6 ? `<li>ほか${d.length - 6}件</li>` : '') : '<li>違いは細かい設定だけ</li>'}</ul>`;
+  };
+  const side = (title, s, o, at, by, key) => `<div class="sync-side"><b>${title}</b><dl>`
     + `<dt>コイン</dt><dd>${s.coins.toLocaleString()}</dd><dt>チケット</dt><dd>${s.tickets.toLocaleString()}</dd><dt>車</dt><dd>${carsOf(s)}台</dd>`
-    + `<dt>レース</dt><dd>${s.stats.races}回</dd><dt>最終更新</dt><dd>${when(at)}</dd><dt>端末</dt><dd>${esc(by)}</dd></dl>`
+    + `<dt>レース</dt><dd>${s.stats.races}回</dd><dt>最終更新</dt><dd>${when(at)}</dd><dt>端末</dt><dd>${esc(by)}</dd></dl>${diff(s, o)}`
     + `<button class="btn primary" data-sy="${key}">${title}を使う</button></div>`;
   el.innerHTML = '<div class="panel sync-ask" role="dialog" aria-modal="true" aria-labelledby="syncAskT"><h3 id="syncAskT">どちらのデータを使いますか？</h3>'
     + `<p>${joined ? 'この端末にも遊んだデータがあります。' : 'この端末とクラウドの両方でデータが変わりました。'}使う方を選んでください（合算はされません）。選ばなかった方はこの端末のバックアップに残ります（設定 → データ連携 → 元に戻す）</p>`
-    + `<div class="sync-cmp">${side('この端末のデータ', me, st()?.at, LABEL, 'local')}${side('クラウドのデータ', k.cs, +k.c.at || 0, String(k.c.by || '?'), 'cloud')}</div>`
+    + `<div class="sync-cmp">${side('この端末のデータ', me, k.cs, st()?.at, LABEL, 'local')}${side('クラウドのデータ', k.cs, me, +k.c.at || 0, String(k.c.by || '?'), 'cloud')}</div>`
     + `<div class="sync-foot">${joined ? '<button class="btn sm" data-sy="leave">連携をやめる</button>' : ''}<button class="btn sm" data-sy="later">あとで選ぶ</button></div></div>`;
   el.hidden = false;
   el.querySelector('[data-sy="later"]').focus();   // it opens on its own: a stray Enter / Space must not pick a side
@@ -501,7 +541,7 @@ export function initSync(hooks) {
   // download: at start, when shown again, and when the cloud rev moves (listener)
   document.addEventListener('visibilitychange', () => { if (linked() && (!document.hidden || st().dirty)) run(); });
   addEventListener('online', () => { if (linked()) run(); render(); });
-  addEventListener('offline', () => { if (linked()) { S.phase = 'offline'; render(); } });
+  addEventListener('offline', () => { if (linked()) { phase('offline'); render(); } });
   if (linked()) setTimeout(run, 1500);
   icon();
 }
