@@ -129,6 +129,41 @@ export const GACHA = {
   tenGuarantee: 'SR', // 10-pull guarantees at least one SR or better
 };
 
+// Solo CPU difficulty (startRace opts.cpuLevel, save.lastCpuLevel). All CPU tuning lives here. 'normal' = the original
+// CPUs: any car, random skill nodes, pace 0.95-1.0, the old line / braking, rubber band, abilities 0-4 s after the gauge fills.
+//  coinMul: place prize x (on top of the course multiplier); above 1 only for the share of CPUs beaten (ui.js applyRewards:
+//    last place pays like 'normal'), so the picker shows it as the most; desc: one line for the picker
+//  cars: rarity weights for a CPU's car (null = any car, uniform); nodes: [min, max] skill nodes (12 = the whole tree incl.
+//    the limit-break tier); edge: extra top speed & accel (legend +8%); pace: [min, max] top-speed factor
+//  corner: share of the car's real cornering limit (steering at speed x grip x course grip, game.js aiInput) it takes
+//    corners at (1 = the limit; above ~1 it runs wide); brake: m/s^2 it plans its braking with (full brakes give 34);
+//    line: 0 = centre .. 1 = the racing line (game.js racingLine); wander: lane weaving (1 = old);
+//    draft: tucks in behind cars on straights for the slipstream; drift: drifts through hairpins (game.js PIN)
+//  err: small driving mistakes per minute; recover: s stopped / facing backwards before it resets onto the road
+//  ahead / behind: rubber band vs the leading human: top speed x [0] eased in over gap [1]..[2] m (behindSec: s)
+//  tactics: 'late' = random 4-12 s after the gauge fills, 'smart' = per-ability situations (abilities.js cpuAbility),
+//    hold = s full before it takes any straight; none = random 0-4 s
+// Measured (own cars, 3 CPUs, no abilities, median lap vs 'normal' on circuit / city / snow / monaco / suzuka): easy +20-30%,
+// hard -6 to -16%, oni -12 to -22%, legend -19 to -29%; each level >= 6% faster than the one below (>= 3.5% with abilities:
+// the CPUs' attacks on each other add noise).
+export const DIFFICULTY = [
+  { id: 'easy', name: 'やさしい', coinMul: 0.8, desc: 'N・Rの車でのんびり。ときどきミスも', cars: { N: 1, R: 1 }, nodes: [0, 0], pace: [0.9, 0.95],
+    corner: 0.78, brake: 14, line: 0.3, wander: 1, err: 3, recover: 2.5,
+    ahead: [0.93, 40, 220], behind: [1.06, 60, 300], tactics: 'late' },
+  { id: 'normal', name: 'ふつう', coinMul: 1, desc: 'いろんな車のいつものCPU', cars: null, pace: [0.95, 1],
+    ahead: [0.93, 40, 220], behind: [1.06, 60, 300] },
+  { id: 'hard', name: 'つよい', coinMul: 1.3, desc: '強化したSR中心の車。いいラインで走り、能力を狙って使う', cars: { R: 0.25, SR: 0.5, UR: 0.25 }, nodes: [6, 9], pace: [0.98, 1],
+    corner: 0.92, brake: 27, line: 1, wander: 0.5, recover: 1.5,
+    ahead: [0.96, 60, 260], behind: [1.04, 60, 300], tactics: 'smart', hold: 20 },
+  { id: 'oni', name: '鬼', coinMul: 1.7, desc: 'フル強化のSR・UR。限界走行、ドリフト、スリップストリーム', cars: { SR: 0.4, UR: 0.6 }, nodes: [12, 12], pace: [1, 1],
+    corner: 0.93, brake: 27, line: 1, wander: 0.15, draft: true, drift: true, recover: 0.8,
+    ahead: [1, 60, 260], behind: [1.08, 60, 250], tactics: 'smart', hold: 15 },
+  { id: 'legend', name: '伝説', coinMul: 2.5, desc: '限界突破URが性能+8%。離されても執念で追ってくる', cars: { UR: 1 }, nodes: [12, 12], edge: 0.08, pace: [1, 1],
+    corner: 0.96, brake: 30, line: 1, wander: 0.1, draft: true, drift: true, recover: 0.8,
+    ahead: [1, 60, 260], behind: [1.12, 3, 8], behindSec: true, tactics: 'smart', hold: 25 },
+];
+export const DIFFICULTY_BY_ID = Object.fromEntries(DIFFICULTY.map(d => [d.id, d]));
+
 export const ECONOMY = {
   startCoins: 500, startTickets: 3,
   placeCoins: [300, 200, 120, 80],   // by finishing place (1st..4th), splitscreen/online too

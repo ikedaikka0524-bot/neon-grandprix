@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import {
   RARITY, RARITY_ORDER, ABILITIES, PASSIVES, CARS, CAR_BY_ID, STARTER_CAR, SKILL_TREE, NODE_BY_ID,
-  nodeCost, nodeBlockReason, computeStats, GACHA, ECONOMY,
+  nodeCost, nodeBlockReason, computeStats, GACHA, ECONOMY, DIFFICULTY, DIFFICULTY_BY_ID,
 } from './data.js';
 import { TRACKS, TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
 import { getSave, persist, newCarRec, resetSave, reloadSave, loadGhost, saveGhost } from './save.js';
@@ -325,7 +325,7 @@ function loop(now) {
 
 /* ================= screens / navigation ================= */
 const PREP = {
-  solo: { tag: 'SOLO', title: 'ソロ（CPU戦）', lead: 'CPUとレース。順位に応じてコインを獲得！ 難しいコースほど賞金アップ。' },
+  solo: { tag: 'SOLO', title: 'ソロ（CPU戦）', lead: 'CPUとレース。順位に応じてコインを獲得！ 難しいコースほど、強いCPUに勝つほど賞金アップ。' },
   ghost: { tag: 'GHOST', title: '過去の自分と対戦', lead: 'この車・このコースの最速記録を再現したゴーストとタイムアタック。' },
   split: { tag: 'VERSUS', title: '2人対戦（画面分割）', lead: '1台のキーボードで2人対戦。上画面がP1、下画面がP2。' },
 };
@@ -496,6 +496,9 @@ function renderPrep(mode) {
   if (mode === 'split') S2.set(p2, save.cars[p2].look);
   fillPicker('p1'); fillPicker('p2');
   $$('#cpuSeg button').forEach(b => b.classList.toggle('on', +b.dataset.n === cpuCount));
+  const lv = DIFFICULTY_BY_ID[save.lastCpuLevel];
+  $('#diffSeg').innerHTML = DIFFICULTY.map(d => `<button class="dchip ${d.id === lv.id ? 'on' : ''} ${d.id === 'legend' ? 'legend' : ''}" data-lv="${d.id}" aria-pressed="${d.id === lv.id}" title="${esc(d.desc)} ・ 賞金${d.coinMul > 1 ? '最大' : ''}×${d.coinMul}"><b>${esc(d.name)}</b><small><i class="ic-coin"></i>×${d.coinMul}</small></button>`).join('');
+  $('#diffDesc').textContent = lv.desc;
   const tid = curTrack(), ids = mode === 'split' ? [p1, p2] : [p1];
   renderCourses($('#prepCourses'), tid, { ghost: mode === 'ghost' });
   $('#prepRec').innerHTML = `<div class="rec-h">${esc(TRACK_BY_ID[tid].name)} の記録</div>` + ids.map((id, i) => {
@@ -520,7 +523,7 @@ function player(p, name) {
 }
 function startMode(mode) {
   const trackId = curTrack();
-  if (mode === 'solo') return launch({ mode, trackId, players: [player('p1', save.name)], cpuCount }, mode);
+  if (mode === 'solo') return launch({ mode, trackId, players: [player('p1', save.name)], cpuCount, cpuLevel: save.lastCpuLevel }, mode);
   if (mode === 'split') return launch({ mode, trackId, players: [player('p1', save.name), player('p2', 'プレイヤー2')] }, mode);
   if (mode === 'ghost') {
     const g = validGhost(save.selected.p1, trackId);
@@ -592,16 +595,23 @@ function onFinish(res) {
 
 // Records, ghosts and the coin multiplier are per course (the one the UI launched).
 const raceTrack = () => (TRACK_BY_ID[race?.opts.trackId] ? race.opts.trackId : DEFAULT_TRACK);
+// solo: the CPU difficulty it was raced at (the place prize x its coinMul, on top of the course's)
+const raceLevel = () => (race?.opts.mode === 'solo' && Object.hasOwn(DIFFICULTY_BY_ID, String(race.opts.cpuLevel)) ? DIFFICULTY_BY_ID[race.opts.cpuLevel] : null);
 function applyRewards(res) {
   const out = [], locals = res.locals || [], multi = locals.length > 1, tid = raceTrack(), mul = coinMul(tid);
   const firstClear = save.stats.races === 0, coins = n => Math.round(n * mul);
+  // CPU level (solo: one local car): a weaker one (coinMul < 1) always pays less; a stronger one's extra is paid per CPU
+  // beaten, so finishing behind them all pays like ふつう (the bonus is for beating them, not for picking them)
+  const lv = raceLevel(), cpus = (res.placements?.length || 1) - 1, beaten = lv && locals[0] ? Math.max(0, cpus + 1 - locals[0].place) : 0;
+  const lmul = !lv ? 1 : lv.coinMul < 1 || !cpus ? Math.min(1, lv.coinMul) : +(1 + (lv.coinMul - 1) * beaten / cpus).toFixed(2);
   let finished = false, won = false;
   if (mul > 1 && locals.some(L => L.time != null)) out.push({ label: `コース難易度 ${'★'.repeat(TRACK_BY_ID[tid].difficulty)} コイン×${mul}` });
+  if (lv && lv.coinMul !== 1 && locals.some(L => L.time != null)) out.push({ label: `CPU ${lv.name}${lv.coinMul > 1 ? ` ${beaten}/${cpus}台に勝利` : ''} 賞金×${lmul}` });
   for (const L of locals) {
     const tag = multi ? `${String(L.control).toUpperCase()} ` : '';
     if (L.time == null) { out.push({ label: `${tag}リタイア` }); continue; }
     finished = true;
-    const pc = coins(ECONOMY.placeCoins[L.place - 1] || 0);
+    const pc = Math.round((ECONOMY.placeCoins[L.place - 1] || 0) * mul * lmul);
     if (pc) { save.coins += pc; out.push({ label: `${tag}${L.place}位 賞金`, coins: pc }); }
     if (L.place === 1) { won = true; save.tickets += ECONOMY.winTickets; out.push({ label: `${tag}1位ボーナス`, tickets: ECONOMY.winTickets }); }
     const rec = save.cars[L.carId];
@@ -646,8 +656,9 @@ function showResults(res, rewards) {
   t.textContent = title;
   t.classList.toggle('win', win);
 
-  const ghost = res.mode === 'ghost' ? race?.opts.ghost : null;
-  $('#rSub').innerHTML = `<div class="rs-course">${esc(TRACK_BY_ID[raceTrack()].name)}</div>` + locals.map(l => {
+  const ghost = res.mode === 'ghost' ? race?.opts.ghost : null, lv = raceLevel();
+  $('#rSub').innerHTML = `<div class="rs-course">${esc(TRACK_BY_ID[raceTrack()].name)}${lv ? ` ・ CPU ${esc(lv.name)}` : ''}</div>`
+    + (lv?.id === 'legend' && L?.place === 1 && L.time != null ? '<span class="lg-badge">伝説 撃破</span>' : '') + locals.map(l => {
     const diff = ghost && l.time != null ? l.time - ghost.time : null;
     return `<div>${locals.length > 1 ? `${esc(String(l.control).toUpperCase())} ・ ` : ''}タイム <b>${fmt(l.time)}</b> ・ ベストラップ <b>${fmt(l.bestLap)}</b>${diff != null ? ` ・ ゴースト差 <b>${diff > 0 ? '+' : ''}${diff.toFixed(3)}</b>` : ''}</div>`;
   }).join('');
@@ -1134,6 +1145,13 @@ $('#onCourses').onclick = e => {
   s.setTrack(save.lastTrack);   // re-broadcasts the roster (with trackId) -> renderRoster redraws the cards
 };
 $('#cpuSeg').onclick = e => { const b = e.target.closest('button'); if (b) { cpuCount = +b.dataset.n; renderPrep('solo'); } };
+$('#diffSeg').onclick = e => {
+  const b = e.target.closest('[data-lv]');
+  if (!b || !Object.hasOwn(DIFFICULTY_BY_ID, b.dataset.lv) || b.dataset.lv === save.lastCpuLevel) return;
+  save.lastCpuLevel = b.dataset.lv;
+  persist();
+  renderPrep('solo');
+};
 
 // online
 $('#btnHost').onclick = () => connect(true);

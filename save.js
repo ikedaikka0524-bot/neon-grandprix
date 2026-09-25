@@ -1,5 +1,5 @@
 // Persistent player data (localStorage). Every read/write is try/catch'd: storage can be blocked.
-import { CAR_BY_ID, STARTER_CAR, ECONOMY } from './data.js';
+import { CAR_BY_ID, STARTER_CAR, ECONOMY, DIFFICULTY_BY_ID } from './data.js';
 import { TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
 
 const KEY = 'crg.save.v1';
@@ -16,6 +16,7 @@ function fresh() {
     selected: { p1: STARTER_CAR, p2: STARTER_CAR },
     stats: { races: 0, wins: 0 },
     lastTrack: DEFAULT_TRACK,
+    lastCpuLevel: 'normal',   // solo CPU difficulty (data.js DIFFICULTY)
     quality: 'auto',   // graphics: 'auto' | 'high' | 'medium' | 'low' (game.js QUALITY)
   };
 }
@@ -49,6 +50,7 @@ export function getSave() {
   for (const id of known()) migrateRec(data.cars[id]);
   for (const p of ['p1', 'p2']) if (!CAR_BY_ID[data.selected[p]] || !data.cars[data.selected[p]]) data.selected[p] = known()[0];
   if (!Object.hasOwn(TRACK_BY_ID, String(data.lastTrack))) data.lastTrack = DEFAULT_TRACK;
+  if (!Object.hasOwn(DIFFICULTY_BY_ID, String(data.lastCpuLevel))) data.lastCpuLevel = 'normal';
   if (!['auto', 'high', 'medium', 'low'].includes(data.quality)) data.quality = 'auto';
   return data;
 }
