@@ -1652,7 +1652,8 @@ export function cpuAbility(race, car, road) {
     }
     case 'magnet': case 'hellchain': {   // the car it would pick: the nearest one ahead (a magnet pulls at a planted one too)
       const t = id === 'magnet' ? magnetTarget(race, car) : magnetTarget(race, car, HELL.snap, HELL.range), g = t ? gap(t) : 0;
-      return g >= (id === 'magnet' ? 30 : 20) && g <= 150 && (id === 'magnet' && planted(t) || !chainProof(t)) && !mirrorOn(t) && (id === 'magnet' || road.straight > 60) && `target ${Math.round(g)}m`;
+      // (a hellchain at a family owner: its rear ally would cut the chain)
+      return g >= (id === 'magnet' ? 30 : 20) && g <= 150 && (id === 'magnet' && planted(t) || !chainProof(t) && !famWall(t)) && !mirrorOn(t) && (id === 'magnet' || road.straight > 60) && `target ${Math.round(g)}m`;
     }
     case 'domain': { const n = near(35).filter(c => !c.mods?.invulnerable && !mirrorOn(c)).length; return n > 0 && !near(DOMAIN_R).some(mirrorOn) && `${n} in range`; }
     case 'oil': {   // a car 5-30 m behind, about in line (the slick lands 4 m behind, 3 m wide)
@@ -1682,7 +1683,7 @@ export function cpuAbility(race, car, road) {
     // ally lands (famStep rAlong, + 3 m: it blocks only cars behind its centre)
     case 'family': {
       const back = FAM.rear + Math.max(0, car.speed) * FAM.rearV + (car.ability.fam?.allies?.[1]?.hl || 2.1) + 3;
-      return (road.straight >= 250 && 'straight') || (rivals.some(c => gap(c) < -back && gap(c) > -40) && 'chaser');
+      return (road.straight >= 250 && 'straight') || (rivals.some(c => gap(c) < -back && gap(c) > -40 && !chainProof(c) && !mirrorOn(c)) && 'chaser');
     }
     default: return road.straight > 80 && 'straight';   // anything new
   }
@@ -1988,10 +1989,11 @@ function diveHud(race, S, car, text) {
 // the lead FAM.lead m ahead, between the owner's lane and the racing line (FAM.follow = share of the owner's lane); the
 // rear one with its nose FAM.rear + speed x rearV m behind the owner (behind the chase camera, which lags ~speed / 12 m
 // behind its 7.4-9.6 m), sidestepping at FAM.dodge m/s to cover
-// the closest car behind it. Tucked in behind the lead (≤ cone m sideways, nothing past coneOut) the owner gets speedMul
-// += top x power, accelMul += acc x power and gripMul += grip (it takes the lead's line; game.js aiInput's corner limit
-// honours gripMul). The rear one is solid for this client's own cars coming at it from behind (famBlock, from game.js
-// collide): pushed back, bounced, speed x keep at most once per `again` s. After dur they peel off to the sides and
+// the closest car behind it that it can block. Tucked in behind the lead (≤ cone m sideways, nothing past coneOut) the
+// owner gets speedMul += top x power, accelMul += acc x power and gripMul += grip (it takes the lead's line; game.js
+// aiInput's corner limit honours gripMul; a planted car's dirty air, applied after this, takes DF.grip of the total).
+// The rear one is solid for this client's own cars coming at it from behind (famBlock, from game.js collide): pushed
+// back, bounced, speed x keep at most once per `again` s. After dur they peel off to the sides and
 // vanish, and the owner gets a parting boost (partPow for part s). Net ~+3.5 s per use at stock (circuit / suzuka /
 // monza, CONTRACT.md). Not race cars: not in the standings or on the map, nothing targets them. Gone at once when the
 // owner finishes, dives, leaves or is reset onto the road.
@@ -2186,7 +2188,7 @@ function famStep(race, S, car, dt) {
   const rear = f.allies[1], rAlong = -(FAM.rear + v * FAM.rearV + (rear?.hl || 2.1));   // behind the lagging chase camera
   let tgt = ol, best = FAM.cover;
   for (const c of race.cars) {
-    if (c === car || c.finished || c._?.left || away(c)) continue;
+    if (c === car || c.finished || c._?.left || chainProof(c) || mirrorOn(c)) continue;   // (those go through it: famBlock)
     const r = trackS(tr, c.pos, c.trackIndex), g = famGap(tr, s0, r.s);
     if (g > -rAlong - 1 && g < best) { best = g; tgt = r.lat; }
   }
@@ -2212,14 +2214,21 @@ function famStep(race, S, car, dt) {
   }
 }
 
+// the rear ally is solid now (a frozen remote owner's isn't: like collide() NET_STALE)
+const famWall = o => { const a = o?.ability; return !!a?.fam?.allies?.[1]?.solid && !a.famOff && a.active > 0 && !faceStale(o); };
+
 // game.js collide(), every physics substep: the rear ally is solid for this client's own cars that come at it from
-// behind (a remote car's own client does it for that car). Shielded / phased / reflecting / robot cars go through.
+// behind (a remote car's own client does it for that car). Shielded / phased / reflecting / robot cars go through, and
+// so do a planted downforce car and a dive-guarded one (mods.invulnerable, as for the shield; only the face wall holds
+// a planted car)
+// It also cuts a hellchain: a chained car it blocks (a tow toward its owner runs into it) is released at once, as if
+// reflected (no slingshot / whip, rel:1 b:1 online), so the tow can't haul it into the ally again and again.
 export function famBlock(race) {
   const tr = race.track;
   if (!tr?.samples) return;
   for (const o of race.cars) {
-    const a = o.ability, al = a?.fam?.allies?.[1];
-    if (!al?.solid || a.famOff || !(a.active > 0) || faceStale(o)) continue;   // a frozen remote owner: like collide() NET_STALE
+    if (!famWall(o)) continue;
+    const al = o.ability.fam.allies[1];
     const p = trackPt(tr, trackS(tr, o.pos, o.trackIndex).s + al.along, al.lat), px = p.x, pz = p.z, fx = Math.sin(al.h), fz = Math.cos(al.h);
     for (const c of race.cars) {
       if (c === o || c.control === 'net' || c.finished || c._?.left || away(c) || c.mods?.noCollide || c.mods?.invulnerable || c.mods?.reflect) continue;
@@ -2238,13 +2247,19 @@ export function famBlock(race) {
       const vrel = (c.vel.x - (o.vel?.x || 0)) * nx + (c.vel.z - (o.vel?.z || 0)) * nz;   // the ally moves with its owner
       if (vrel >= 0) continue;
       const S = st(race), ca = c.ability || initAbility(race, c), hit = S.time - (ca.famAt ?? -9) > FAM.again, sp0 = Math.hypot(c.vel.x, c.vel.z);
+      const cut = ca.chained;   // (any chain: whichever car it tows toward, it can't tow through the ally)
+      if (cut) {
+        chainRelease(race, c, ca, false, true);
+        c.mods.tow = c.mods.towV = c.mods.assist = 0;   // (this frame's remaining substeps)
+        if (isHuman(c)) flash(race, who(race, c) + 'ファミリーに鎖を断ち切られた!', COLOR.family);
+      }
       const j = -vrel * 1.3 + (hit ? FAM.bounce : 0);
       c.vel.x += nx * j; c.vel.z += nz * j;
       const cap = sp0 * (hit ? FAM.keep : 1), sp1 = Math.hypot(c.vel.x, c.vel.z);
       if (sp1 > cap) c.vel.multiplyScalar(cap / sp1);   // never a push forward
       if (!hit) continue;
       if (isHuman(c)) {
-        if (S.time - (ca.famAt ?? -9) > 1.5) flash(race, who(race, c) + 'ファミリーにブロックされた!', COLOR.family);
+        if (!cut && S.time - (ca.famAt ?? -9) > 1.5) flash(race, who(race, c) + 'ファミリーにブロックされた!', COLOR.family);
         race.hud?.shake?.(c, 0.25);
       }
       ca.famAt = S.time;
