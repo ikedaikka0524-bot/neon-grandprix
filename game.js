@@ -4,7 +4,7 @@ import { CARS, CAR_BY_ID, ABILITIES, SKILL_TREE, DIFFICULTY_BY_ID, computeStats 
 import { TRACK_BY_ID, DEFAULT_TRACK } from './tracks.js';
 import { buildCarMesh } from './carmodel.js';
 import { buildWorld } from './world.js';
-import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities, robotKnock, faceWall, netAway, cpuAbility, mirrorBlocks } from './abilities.js';
+import { initAbility, updateAbilities, tryActivate, applyRemoteAbility, clearAbilities, robotKnock, faceWall, famBlock, famAnnounce, netAway, cpuAbility, mirrorBlocks } from './abilities.js';
 import { createRecorder, createGhostPlayer } from './ghost.js';
 import { netSample, ageOf, predict, newOffset, applyOffset, retarget, decay } from './netpredict.js';
 import { createTouch, keepAwake, isPhone } from './touch.js';
@@ -101,7 +101,7 @@ async function setup(ctx, root, opts, mode) {
 
   const track = ctx.track = buildTrack(def);
   const race = ctx.race = {
-    THREE, scene, time: 0, state: 'countdown', mode, def, cars: [], track,
+    THREE, scene, renderer, time: 0, state: 'countdown', mode, def, cars: [], track,
     net: mode === 'online' ? (opts.net || null) : null, localPid: opts.localPid ?? null,
     hazards: [], hud: {
       flash: (text, color) => flashAll(ctx, text, color), layer: car => ctx.viewByCar?.get(car)?.hud.tints,
@@ -119,6 +119,7 @@ async function setup(ctx, root, opts, mode) {
   ctx.lv = DIFFICULTY_BY_ID[mode === 'solo' && Object.hasOwn(DIFFICULTY_BY_ID, String(opts.cpuLevel)) ? opts.cpuLevel : 'normal'];
   if (ctx.lv.corner) track.line = racingLine(track);   // ~0.1 s: behind the loading screen, not in the first frame
   const { list, grid } = buildEntries(opts, mode, ctx.lv);
+  if (!track.line && list.some(e => e.stats?.ability === 'family')) track.famLine = racingLine(track);   // the family's lead ally drives it
   const meshes = await Promise.all(list.map(e => buildCarMesh(e.carId, e.look)));
   if (R !== ctx) return;
   race.cars = list.map((e, i) => makeCar(i, e, meshes[i]));
@@ -129,6 +130,8 @@ async function setup(ctx, root, opts, mode) {
   const g0 = mode === 'ghost' && ctx.ghostData?.frames?.[0];
   grid.forEach((e, slot) => placeOnGrid(ctx, race.cars[list.indexOf(e)], Array.isArray(g0) ? ghostSlot(track, g0) : slot));
   for (const car of race.cars) initAbility(race, car);
+  await Promise.all(race.loads || []);   // meshes an ability builds while loading (family allies), before warm()
+  if (R !== ctx) return;
 
   // ---- viewports
   const p1 = race.cars.find(c => c.control === 'p1') || race.cars[0];
@@ -464,7 +467,7 @@ function respawn(ctx, car) {
   car.vel.set(0, 0, 0);
   car.speed = 0;
   car.spin = 0;
-  Object.assign(car._, { h: car.heading, s: 0, yaw: 0, drift: false, stuck: 0 });
+  Object.assign(car._, { h: car.heading, s: 0, yaw: 0, drift: false, stuck: 0, resets: (car._.resets || 0) + 1 });   // resets: family allies leave
   const v = ctx.viewByCar?.get(car);
   if (v) flashView(v, 'コースに復帰', '#9fe8ff');
 }
@@ -1008,7 +1011,7 @@ function aiInput(ctx, car, dt) {
     }
   }
   c.lane += (c.laneTarget - c.lane) * damp(pro ? 2.5 : 1.3, dt);
-  const df = car.mods.downforce, G = df ? 0.99 : car.stats.grip * tr.grip, St = car.stats.steer * (1 + 0.25 * df);
+  const df = car.mods.downforce, G = df ? 0.99 : car.stats.grip * car.mods.gripMul * tr.grip, St = car.stats.steer * (1 + 0.25 * df);
   if (!pro) {
     const ahead = S[(idx + Math.round(35 / tr.spacing)) % N].curv;
     const apex = -Math.sign(ahead) * Math.min(1, Math.abs(ahead) * 70) * (W2 - 3);   // hug the inside of the next corner
@@ -1042,7 +1045,7 @@ function aiInput(ctx, car, dt) {
   let vAllowed = Infinity;
   if (!pro) {
     // (mods still hold last frame's abilities here) downforce: no scrub, so the limit is steering, not grip
-    const latLimit = (car.mods.downforce ? 0.99 * 1.45 : car.stats.grip * tr.grip) * 36 * 1.3;
+    const latLimit = (car.mods.downforce ? 0.99 * 1.45 : car.stats.grip * car.mods.gripMul * tr.grip) * 36 * 1.3;
     for (let k = 2; k < range; k += 3) {
       const kap = Math.abs(S[(idx + k) % N].curv) + 1e-4;
       const vi = Math.sqrt(latLimit / kap);
@@ -1266,6 +1269,7 @@ function collide(ctx) {
     robotKnock(ctx.race, a, b);   // robotdash: the robot sends the other car flying
   }
   faceWall(ctx.race);   // facewall: cars behind the wall of faces can't pass it
+  famBlock(ctx.race);   // family: the rear ally is solid for chasers
 }
 
 function impact(ctx, x, y, z, strength, cars) {
@@ -1434,7 +1438,7 @@ function hookNet(ctx) {
     if (Number.isFinite(msg.p)) car.progress = msg.p;
     if (Number.isFinite(msg.ft) && !car.finished) { car.finished = true; car.finishTime = msg.ft; }
   });
-  on('go', () => { if (!ctx.goAt) ctx.goAt = performance.now() + 3900; });   // same 3.9 s lead-in as offline
+  on('go', () => { if (!ctx.goAt) { ctx.goAt = performance.now() + 3900; famAnnounce(race); } });   // same 3.9 s lead-in as offline; family: name the allies
   on('ability', msg => { if (R === ctx && String(msg.pid) !== String(race.localPid)) applyRemoteAbility(race, msg); });
   on('finish', msg => {
     const car = byPid.get(String(msg.pid));

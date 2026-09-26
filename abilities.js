@@ -1,8 +1,9 @@
 // Active abilities: gauges, effects written into car.mods, hazards (oil / timeslow) and all their visuals.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { ABILITIES } from './data.js';
-import { buildRobotMesh } from './carmodel.js';
+import { ABILITIES, CARS, CAR_BY_ID } from './data.js';
+import { buildRobotMesh, buildCarMesh } from './carmodel.js';
+import { getSave } from './save.js';
 import { getDimension, makePortal, ORIGIN, RUN } from './tokyo-dimension.js';
 
 const OIL_RADIUS = 3, OIL_BEHIND = 4.2;
@@ -59,9 +60,12 @@ const isHuman = c => c.control === 'p1' || c.control === 'p2';
 // robot form (incl. both transforms): immune, not slowed by hits, knocks others away
 const isRobot = c => c.ability?.id === 'robotdash' && c.ability.active > 0 && c.ability.t < c.ability.robotDur + ROBOT_T;
 // shield / phase / robot form shrug a hellchain off; so does diving into tokyodive's own space (no whip / slow in there)
-const chainProof = c => isRobot(c) || away(c) || (c.ability?.active > 0 && (c.ability.id === 'shield' || c.ability.id === 'phase'));
+// and its landing guard
+const chainProof = c => isRobot(c) || away(c) || diveGuard(c) || (c.ability?.active > 0 && (c.ability.id === 'shield' || c.ability.id === 'phase'));
 // tokyodive: off in its own space (a remote diver is just hidden here) - nothing can target or slow it meanwhile
 const away = c => !!c?.ability?.away;
+// tokyodive: just back on the road (ネオン・ブースト), still immune like a shield (DIVE.guard)
+const diveGuard = c => c?.ability?.id === 'tokyodive' && c.ability.landed && c.ability.active > 0 && c.ability.t < DIVE.guard;
 // reflect: this car's mirrors are up (every attack aimed at it bounces back, see REFLECT)
 const mirrorOn = c => c?.ability?.id === 'reflect' && c.ability.active > 0;
 // CPU 'hold' fallback (game.js): no attack while any car's mirrors are up (it would come back; cpuAbility checks its target)
@@ -337,7 +341,7 @@ const underTex = () => canvasTex(128, g => {
   gr.addColorStop(0, 'rgba(255,255,255,0.9)'); gr.addColorStop(0.45, 'rgba(255,255,255,0.45)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
   g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
 });
-const TEX = { clock: clockTex, film: filmTex, beam: beamTex, rune: runeTex, flow: flowTex, under: underTex, blobs: () => [blobTex(), blobTex(), blobTex()] };
+const TEX = { clock: clockTex, film: filmTex, beam: beamTex, rune: runeTex, flow: flowTex, under: underTex, famTag: famTagTex, blobs: () => [blobTex(), blobTex(), blobTex()] };
 function tex(S, key) {
   return (S.tex[key] ||= TEX[key]());
 }
@@ -665,7 +669,7 @@ function carVisuals(race, S, car, dt) {
   if (a.slowVis < 0.005) a.slowVis = 0;
   a.dfVis += ((act === 'downforce' ? Math.min(1, Math.abs(car.speed) / 45) * 0.7 : 0) - a.dfVis) * Math.min(1, dt * 5);   // speed lines
   if (a.dfVis < 0.005) a.dfVis = 0;
-  if (!act && !a.slowVis && !a.fx && !(car.spin > 0)) return;
+  if (!act && !a.slowVis && !a.fx && !(car.spin > 0) && a.id !== 'family') return;
   if (a.id === 'phase') setPhase(car, act === 'phase');
   const fx = carFx(car);
   if (!fx) return;
@@ -844,6 +848,31 @@ function carVisuals(race, S, car, dt) {
     }
     fx.under.visible = !!act;
     if (act) fx.under.material.opacity = 0.7 + 0.3 * Math.sin(t * 9);
+    const guard = act && diveGuard(car);   // immune: the glow flickers cyan / pink
+    fx.under.material.color.copy(PAL.tokyodive[guard ? (Math.sin(t * 24) > 0 ? 4 : 3) : 2]);
+    if (act && a.landed && !a.away) {   // ネオン・ブースト: cyan / pink neon trails left hanging behind the exhausts
+      fx.exhaust.forEach((e, i) => {
+        const p = world(e);
+        for (let n = Math.floor((guard ? 110 : 70) * dt + Math.random()); n > 0; n--) {
+          const k = rnd(0, 1);   // spread along this frame's travel: a continuous ribbon, not dots
+          S.glow.emit(p.x - vx * dt * k + rnd(-0.15, 0.15), p.y + rnd(-0.1, 0.15), p.z - vz * dt * k + rnd(-0.15, 0.15), vx * 0.08, rnd(0, 0.4), vz * 0.08,
+            Math.random() < 0.8 ? PAL.tokyodive[i ? 3 : 4] : PAL.tokyodive[2], rnd(0.45, 0.7), 0.6, 0.12, 0, 1);
+        }
+      });
+    }
+  }
+
+  if (a.id === 'family') {   // always-on blue underglow, bright while the family rides along
+    if (!fx.famUnder) {
+      const mat = new THREE.MeshBasicMaterial({ map: tex(S, 'under'), color: COLOR.family, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+      fx.famUnder = new THREE.Mesh(S.geo.plane, mat);
+      fx.famUnder.scale.set(fx.size.x * 0.9, 1, fx.size.z * 0.62);
+      fx.famUnder.position.set(fx.center.x, 0.06, fx.center.z);
+      fx.famUnder.renderOrder = 2;
+      fx.group.add(fx.famUnder);
+      fx.mats.push(mat);
+    }
+    fx.famUnder.material.opacity = act ? 0.8 + 0.2 * Math.sin(t * 9) : 0.32 + 0.05 * Math.sin(t * 2.2);
   }
 
   if (car.spin > 0 && Math.random() < dt * 25) {   // dizzy sparkles
@@ -872,7 +901,17 @@ function applyOwn(race, car, a) {
   else if (a.id === 'domain') { m.speedMul += DOMAIN_BOOST; m.accelMul += DOMAIN_BOOST; }        // a.power = slow inside the dome
   else if (a.id === 'downforce') m.downforce = a.power;
   else if (a.id === 'tokyodive' && a.away) { m.noCollide = true; m.noOffroadPenalty = true; }
+  else if (a.id === 'tokyodive' && a.landed) {   // ネオン・ブースト
+    const b = DIVE.boost * Math.min(1, a.power);   // node a3 doesn't raise it: the leaderboard lap bound (CONTRACT)
+    m.speedMul += b; m.accelMul += b;
+    if (diveGuard(car)) m.invulnerable = true;
+  }
   else if (a.id === 'reflect') m.reflect = true;   // game.js collide(): keeps its speed, the rammer bounces off
+  else if (a.id === 'family') {   // tucked in behind the lead ally (famStep: famK), then the parting boost
+    const b = a.t >= a.famDur ? FAM.partPow : 0;   // (the draft fades out meanwhile: whichever is more, not both)
+    m.speedMul += Math.max(FAM.top * a.power * a.famK, b); m.accelMul += Math.max(FAM.acc * a.power * a.famK, b);
+    m.gripMul += FAM.grip * a.famK;   // on the lead's line
+  }
   else if (a.id === 'robotdash') {
     if (isRobot(car)) m.invulnerable = true;
     else { m.speedMul += a.power; m.accelMul += a.power; }   // changed back: the dash
@@ -884,7 +923,7 @@ function endFx(S, car) {
   if (a.id === 'shield') burst(S.glow, p, 40, PAL.shield, 8, 0.5, 0.45, 0.05);
   else if (a.id === 'phase') { setPhase(car, false); burst(S.glow, p, 30, PAL.phase, 5, 0.6, 0.4, 0.05); }
   else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash', 'hellchain'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
-  else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash', 'tokyodive', 'reflect'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
+  else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash', 'tokyodive', 'reflect', 'family'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
   else burst(S.smoke, p, 10, PAL.smoke, 2, 0.8, 0.5, 1.4, -0.5, 1.5, 0.25);
 }
 
@@ -1574,6 +1613,12 @@ export function cpuAbility(race, car, road) {
     // lands pow m on at the same speed: only with 45 m of straight and of braking room left after the jump (less landed it
     // in a braking zone too fast, or off the line at the turn-in)
     case 'warp': return Math.min(road.straight, road.room) > ABILITIES.warp.power * (car.stats?.abilityPower || 1) + 45 && 'straight';
+    // a long straight to draft down (road.straight tops out at 250), or a chaser up to 40 m back, behind where the rear
+    // ally lands (famStep rAlong, + 3 m: it blocks only cars behind its centre)
+    case 'family': {
+      const back = FAM.rear + Math.max(0, car.speed) * FAM.rearV + (car.ability.fam?.allies?.[1]?.hl || 2.1) + 3;
+      return (road.straight >= 250 && 'straight') || (rivals.some(c => gap(c) < -back && gap(c) > -40) && 'chaser');
+    }
     default: return road.straight > 80 && 'straight';   // anything new
   }
 }
@@ -1620,6 +1665,7 @@ export function faceWall(race) {
 function start(race, car, id, dur, pow, pose, target = null) {
   const S = st(race), at = new THREE.Vector3(pose.x, pose.y, pose.z);
   if (id === 'tokyodive') { diveStart(race, S, car, dur, pow, pose); return; }
+  if (id === 'family') { famStart(race, S, car, dur, pow, pose); return; }
   if (id === 'warp') {
     const d = warpDest(race, pose, pow);
     if (car && car.control !== 'net') {   // remote cars arrive via net state
@@ -1669,12 +1715,14 @@ function start(race, car, id, dur, pow, pose, target = null) {
 // A gate opens ahead, the car drives in (DIVE.lead s) and is away: a local driver races the pocket course
 // (tokyo-dimension.js, car._.track), a CPU is parked out of the world. It comes back along the track, from where it went
 // in, by top speed x DIVE.base x the ability's own 6 s (pays for the time away; reaching the exit early keeps all of it,
-// so a quick pocket run is the skill bonus) + power x the farthest it got in there x DIVE.inside. Net ~+3 s over just
-// driving on. Power and a longer window (node a2) touch only the pocket part: power on the whole jump, and base paid for
-// 7.2 s, netted ~2.3x stock with every node. A CPU drives it like a clean run: DIVE.cpuIn m/s, back at the exit (RUN).
-// A remote diver is only hidden here: its own client runs the dive and sends { out: 1 } with where it came back.
+// so a quick pocket run is the skill bonus) + power x the farthest it got in there x DIVE.inside. Back on the road it
+// comes out at full speed (the corners ahead still cap it, landSpeed) into a 'ネオン・ブースト': speed / accel + boost
+// (x power, at most 1) for boostT s (x node a2), the first guard s of it immune like a shield (diveGuard). Net ~+4.2 s
+// over just driving on, ~+5.3 s with every node (CONTRACT.md). Power and node a2 touch only the pocket part and the boost. A CPU
+// drives it like a clean run: DIVE.cpuIn m/s, back at the exit (RUN). A remote diver is only hidden here: its own client
+// runs the dive and sends { out: 1 } with where it came back (every client then shows the boost and the guard).
 // cpuIn is per real second (the pocket's clock runs 1.25x): 54 = ~302 m in 5.6 s, a clean pocket run
-const DIVE = { lead: 0.3, minSpeed: 15, base: 0.8, inside: 0.6, cpuIn: 54, remoteSlack: 1.5, near: 25 };
+const DIVE = { lead: 0.3, minSpeed: 15, base: 0.8, inside: 0.8, cpuIn: 54, remoteSlack: 1.5, near: 25, boost: 0.4, boostT: 2, guard: 1.5 };
 const DIVE_T = ABILITIES.tokyodive.duration;
 const diveGain = (car, d, t, inside) => Math.min(t, DIVE_T) * (car.stats?.top || 60) * DIVE.base + d.pow * inside * DIVE.inside;
 // the finish counts where it lands: a flag closer than a clean dive's time away (at this race's pace) comes sooner by driving
@@ -1714,7 +1762,16 @@ function diveStart(race, S, car, dur, pow, pose) {
   a.active = a.activeMax = DIVE.lead + dur + (remote ? DIVE.remoteSlack : 1);   // a local dive ends itself before this
   a.power = pow;
   a.t = 0;
+  a.landed = false;
   a.dive = { t: 0, phase: 'gate', dur, pow, speed0: spd, human: isHuman(car), remote };
+}
+
+// back on the road: the ネオン・ブースト (applyOwn) runs on as the ability's active time, longer with node a2 (d.dur);
+// the guard counts from here (a.t)
+function diveLand(a, d) {
+  a.landed = true;
+  a.t = 0;
+  a.active = a.activeMax = DIVE.boostT * (d?.dur || DIVE_T) / DIVE_T;
 }
 
 function diveStep(race, S, car, dt) {
@@ -1790,13 +1847,14 @@ function diveOut(race, S, car) {
     dest.pos.addScaledVector(s.right, line.off[dest.i] - _v.copy(dest.pos).sub(s.pos).dot(s.right));
     dest.heading += wrap(line.head[dest.i] - dest.heading);
   }
-  if (!d.D) car.speed = d.speed0;
+  // out of the gate at full speed (a pocket run ends slow, out of the garage helix), no faster than the corners ahead allow
+  car.speed = Math.max(d.D ? car.speed : d.speed0, (car.stats?.top || 0) * (car._?.skill || 1));
   if (tr?.samples && dest.i != null) car.speed = landSpeed(tr, car, dest.i, car.speed);
   car._.track = null;
   car._.away = false;
   a.away = false;
   a.dive = null;
-  a.active = 0;
+  diveLand(a, d);
   place(car, dest.pos, dest.heading);
   car.mesh.visible = true;
   if (tr?.nearest) car.trackIndex = tr.nearest(dest.pos, dest.i).index;
@@ -1805,7 +1863,7 @@ function diveOut(race, S, car) {
   if (d.D) {
     diveHud(race, S, car, null);
     screenFlash(race, car, DIVE_SCREEN);
-    flash(race, `${who(race, car)}+${Math.round(dist)}m!`, COLOR.tokyodive);
+    flash(race, `${who(race, car)}+${Math.round(dist)}m! ネオン・ブースト!`, COLOR.tokyodive);
   }
   sendOut(race, car, dest.pos, dest.heading);
 }
@@ -1826,10 +1884,10 @@ function sendOut(race, car, p, h) {   // online: where the diver is back on the 
 }
 
 function diveBack(race, S, car) {   // a remote diver reappears
-  const a = car.ability;
+  const a = car.ability, d = a.dive;
   a.away = false;
   a.dive = null;
-  a.active = 0;
+  diveLand(a, d);   // its boost / guard as seen here: chains, bolts and reflects treat it as its own client does
   if (car._) car._.away = false;
   if (!car._?.left) car.mesh.visible = true;
   diveGate(S, car.pos, car.heading, 0.7, true);
@@ -1854,6 +1912,278 @@ function diveHud(race, S, car, text) {
     layer.appendChild(el);
   }
   if (el.firstChild.textContent !== text) el.firstChild.textContent = text;
+}
+
+// ---------- family ----------
+// Two ally cars (a player's: its two best other cars from the garage; a CPU's: random; a remote owner's: the ones its
+// ability message names) drive in from behind with a flash of headlights and ride along for dur s. They are placed from
+// the owner's own spot on the track alone (same place on every screen, nothing about them goes over the net per frame):
+// the lead FAM.lead m ahead, between the owner's lane and the racing line (FAM.follow = share of the owner's lane); the
+// rear one with its nose FAM.rear + speed x rearV m behind the owner (behind the chase camera, which lags ~speed / 12 m
+// behind its 7.4-9.6 m), sidestepping at FAM.dodge m/s to cover
+// the closest car behind it. Tucked in behind the lead (≤ cone m sideways, nothing past coneOut) the owner gets speedMul
+// += top x power, accelMul += acc x power and gripMul += grip (it takes the lead's line; game.js aiInput's corner limit
+// honours gripMul). The rear one is solid for this client's own cars coming at it from behind (famBlock, from game.js
+// collide): pushed back, bounced, speed x keep at most once per `again` s. After dur they peel off to the sides and
+// vanish, and the owner gets a parting boost (partPow for part s). Net ~+3.5 s per use at stock (circuit / suzuka /
+// monza, CONTRACT.md). Not race cars: not in the standings or on the map, nothing targets them. Gone at once when the
+// owner finishes, dives, leaves or is reset onto the road.
+const FAM = { lead: 12, rear: 12.5, rearV: 0.085, follow: 0.7, enter: 0.9, out: 0.9, part: 2, partPow: 0.5, top: 0.55, acc: 2, grip: 1.8, cone: 2.4, coneOut: 4,
+  side: 3.8, cover: 60, dodge: 6, keep: 0.75, bounce: 3, again: 0.7, r: 1 };
+COLOR.family = '#3d8bff';
+PAL.family = pal('#ffffff', '#cfe6ff', '#6fb0ff', '#2f6bff', '#8fe0ff');
+const HEX = /^#[0-9a-f]{6}$/i, RANK = { N: 0, R: 1, SR: 2, UR: 3 };
+const famLook = (l, id) => ({ body: HEX.test(l?.body) ? l.body : CAR_BY_ID[id].color, wheel: HEX.test(l?.wheel) ? l.wheel : '#222222', wing: !!l?.wing });
+const _fs = { s: 0, lat: 0 }, _fp = { x: 0, y: 0, z: 0, ty: 0, h: 0 }, _fa = new THREE.Vector3();
+
+function famTagTex() {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 64;
+  const g = c.getContext('2d');
+  g.font = 'italic 900 42px system-ui,sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.lineJoin = 'round'; g.lineWidth = 8; g.strokeStyle = '#0a2a6e'; g.strokeText('FAMILY', 128, 34);
+  g.shadowColor = '#3d8bff'; g.shadowBlur = 10; g.fillStyle = '#eaf4ff';
+  g.fillText('FAMILY', 128, 34);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// arc length (m) and lateral of p near sample i0 (track.nearest over i0 ± 3, without allocating)
+function trackS(tr, p, i0) {
+  const S = tr.samples, N = tr.N;
+  let best = 0, bd = Infinity;
+  for (let k = -3; k <= 3; k++) {
+    const i = ((((i0 | 0) + k) % N) + N) % N, q = S[i].pos, d = (q.x - p.x) ** 2 + (q.z - p.z) ** 2;
+    if (d < bd) { bd = d; best = i; }
+  }
+  const s = S[best], dx = p.x - s.pos.x, dz = p.z - s.pos.z;
+  _fs.s = best * tr.spacing + dx * s.tan.x + dz * s.tan.z;
+  _fs.lat = dx * s.right.x + dz * s.right.z;
+  return _fs;
+}
+// the point at arc length s, lat m right of the centre line, with the slope (ty) and heading (h) of the track there
+function trackPt(tr, s, lat) {
+  const S = tr.samples, N = tr.N, u = ((s / tr.spacing) % N + N) % N, i = u | 0, f = u - i, a = S[i], b = S[(i + 1) % N];
+  _fp.x = a.pos.x + (b.pos.x - a.pos.x) * f + (a.right.x + (b.right.x - a.right.x) * f) * lat;
+  _fp.y = a.pos.y + (b.pos.y - a.pos.y) * f;
+  _fp.z = a.pos.z + (b.pos.z - a.pos.z) * f + (a.right.z + (b.right.z - a.right.z) * f) * lat;
+  _fp.ty = a.tan.y + (b.tan.y - a.tan.y) * f;
+  _fp.h = Math.atan2(a.tan.x + (b.tan.x - a.tan.x) * f, a.tan.z + (b.tan.z - a.tan.z) * f);
+  return _fp;
+}
+function famLine(tr, s) {   // racing line offset at s (game.js builds track.famLine when no difficulty line exists)
+  const L = tr.line || tr.famLine;
+  if (!L) return 0;
+  const N = tr.N, u = ((s / tr.spacing) % N + N) % N, i = u | 0;
+  return L.off[i] + (L.off[(i + 1) % N] - L.off[i]) * (u - i);
+}
+const famGap = (tr, a, b) => ((a - b) % tr.length + tr.length * 1.5) % tr.length - tr.length / 2;   // m s=b is behind s=a
+
+// a player's allies: its two best other cars (rarity, then skills + limit break), topped up at random
+function famPick(car) {
+  let list = [];
+  if (isHuman(car)) try {
+    const cars = getSave().cars || {}, rank = id => RANK[CAR_BY_ID[id].rarity] * 100 + (cars[id].nodes?.length || 0) + (cars[id].dupes > 0 ? 1 : 0);
+    list = Object.keys(cars).filter(id => Object.hasOwn(CAR_BY_ID, id) && id !== car.carId).sort((x, y) => rank(y) - rank(x))
+      .slice(0, 2).map(id => ({ id, look: famLook(cars[id].look, id) }));
+  } catch (e) { console.warn('[family]', e); }
+  const pool = CARS.filter(c => c.id !== car.carId && !list.some(e => e.id === c.id));
+  while (list.length < 2 && pool.length) { const d = pool.splice((Math.random() * pool.length) | 0, 1)[0]; list.push({ id: d.id, look: famLook(null, d.id) }); }
+  return list;
+}
+// a remote owner's allies, from its message (untrusted: known car ids and #rrggbb colours only); built once per race
+function famRemote(race, car, fam) {
+  if (car.ability.fam) return;
+  const list = (Array.isArray(fam) ? fam : []).slice(0, 2).filter(x => Array.isArray(x) && Object.hasOwn(CAR_BY_ID, String(x[0])))
+    .map(x => ({ id: String(x[0]), look: famLook({ body: x[1], wheel: x[2], wing: x[3] }, String(x[0])) }));
+  famBuild(race, car, list.length === 2 ? list : famPick(car));
+}
+
+// the allies' meshes, hidden in the scene (stopRace disposes them), their textures uploaded now, not on their first show
+// (built while loading, or for a remote owner at 'go', famAnnounce)
+function famBuild(race, car, list) {
+  const a = car.ability, S = st(race), f = a.fam = { list, allies: [], rl: 0 };
+  const p = Promise.all(list.map((e, i) => buildCarMesh(e.id, e.look).then(m => {
+    if (a.gone || a.fam !== f || !race.scene) return;
+    (f.allies[i] = famAlly(race, S, m, e.id)).g.traverse(o => [].concat(o.material || []).forEach(mt => {
+      for (const k in mt) if (mt[k]?.isTexture && k !== 'envMap') race.renderer?.initTexture(mt[k]);
+    }));
+  }))).catch(e => console.warn('[family]', e));
+  (race.loads ||= []).push(p);
+}
+const famMsg = f => f.list.map(e => [e.id, e.look.body, e.look.wheel, e.look.wing ? 1 : 0]);
+// online, at the host's 'go' (every screen has loaded): this player's allies, so the others build them during the
+// countdown instead of on its first use mid-race (lost: its ability message still names them)
+export function famAnnounce(race) {
+  const f = race.cars.find(c => c.control === 'p1')?.ability?.fam;
+  if (race.net && f) race.net.send({ t: 'ability', pid: race.localPid, id: 'family', pre: 1, fam: famMsg(f) });
+}
+
+function famAlly(race, S, m, id) {
+  const g = new THREE.Group(), box = new THREE.Box3().setFromObject(m), size = box.getSize(new THREE.Vector3()), hl = (CAR_BY_ID[id]?.len || 4.2) / 2;
+  g.rotation.order = 'YXZ';
+  S.famMat ||= {
+    under: new THREE.MeshBasicMaterial({ map: tex(S, 'under'), color: COLOR.family, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+    tag: new THREE.SpriteMaterial({ map: tex(S, 'famTag'), transparent: true, opacity: 0.9, depthWrite: false }),
+  };
+  S.geo.lamp ||= new THREE.PlaneGeometry(0.75, 0.42);
+  const under = new THREE.Mesh(S.geo.plane, S.famMat.under), tag = new THREE.Sprite(S.famMat.tag);
+  under.scale.set(size.x * 0.85, 1, size.z * 0.6);
+  under.position.y = 0.06;
+  under.renderOrder = 2;
+  tag.scale.set(3.2, 0.8, 1);
+  tag.position.y = box.max.y + 0.75;
+  const lampMat = new THREE.MeshBasicMaterial({ map: tex(S, 'under'), color: '#eef6ff', transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+  g.add(m, under, tag);
+  for (const sx of [1, -1]) {   // headlights
+    const l = new THREE.Mesh(S.geo.lamp, lampMat);
+    l.position.set(sx * size.x * 0.3, box.min.y + size.y * 0.42, box.max.z + 0.05);
+    l.renderOrder = 3;
+    g.add(l);
+  }
+  g.visible = false;
+  race.scene.add(g);
+  return { g, m, lampMat, hl, off: hl - FAM.r, x: 0, y: 0, z: 0, h: 0, lat: 0, along: 0, placed: false, solid: false };
+}
+
+function famStart(race, S, car, dur, pow, pose) {
+  burst(S.glow, _w.set(pose.x, pose.y + 0.8, pose.z), 36, PAL.family, 7, 0.5, 0.5, 0.05, 0, 2.5);
+  ring(S, _w.set(pose.x, pose.y + 0.15, pose.z), COLOR.family, { r0: 1.5, r1: 7, life: 0.45, opacity: 0.8 });
+  const a = car?.ability, tr = race.track;
+  if (!a?.fam || !tr?.samples) return;
+  const lat = trackS(tr, pose, pose.i ?? car.trackIndex).lat;
+  a.active = a.activeMax = dur + FAM.part;
+  a.power = pow;
+  a.t = 0;
+  a.famDur = dur;
+  a.famK = 0;
+  a.famOff = a.famSaid = false;
+  a.famRes = car._?.resets || 0;
+  a.famSide = lat > 0 ? -1 : 1;   // the lead comes by on the roomier side, the rear one on the other
+  a.fam.rl = lat;
+}
+
+function famPlace(S, al, tr, s, along, lat, sc, dt, v, lamp) {
+  if (!al) return;
+  const p = trackPt(tr, s + along, lat), dx = p.x - al.x, dz = p.z - al.z;
+  let h = p.h;
+  if (al.placed && dx * dx + dz * dz > 1e-4) { h = Math.atan2(dx, dz); if (Math.cos(h - p.h) < 0) h = p.h; }   // along its own path: a lane change turns it
+  al.h = al.placed ? al.h + wrap(h - al.h) * Math.min(1, dt * 12) : h;
+  al.va = al.placed && dt > 0 ? (along - al.along) / dt : 0;   // m/s it moves on its owner (driving in / peeling back): famBlock
+  al.placed = true; al.x = p.x; al.y = p.y; al.z = p.z; al.lat = lat; al.along = along;
+  al.g.visible = true;
+  al.g.position.set(p.x, p.y, p.z);
+  al.g.rotation.set(-Math.asin(clamp(p.ty, -1, 1)), al.h, 0);
+  al.g.scale.setScalar(Math.max(0.01, sc));
+  al.lampMat.opacity = lamp;
+  for (const wh of al.m.userData.wheels || []) wh.rotation.x += v * dt / (wh.userData.r || 0.35);
+  al.m.userData.anim?.(S.time, v);
+}
+
+function famHide(S, a) {
+  if (!a.famShown) return;
+  a.famShown = false;
+  for (const al of a.fam?.allies || []) {
+    if (!al) continue;
+    if (al.g.visible) {   // gone in a blue puff
+      const p = _w.set(al.x, al.y + 0.8, al.z);
+      burst(S.glow, p, 30, PAL.family, 6, 0.55, 0.6, 0.05, 0, 2);
+      burst(S.smoke, p, 8, PAL.smoke, 2, 0.6, 0.6, 1.6, -0.3, 1.5, 0.25);
+    }
+    al.g.visible = al.placed = al.solid = false;
+  }
+}
+
+function famEnd(race, S, car, send) {
+  const a = car.ability;
+  a.famOff = true;
+  a.active = a.famK = 0;
+  famHide(S, a);
+  if (send && race.net && car.control === 'p1') race.net.send({ t: 'ability', pid: race.localPid, id: 'family', end: 1 });
+}
+
+function famStep(race, S, car, dt) {
+  const a = car.ability, f = a.fam, tr = race.track;
+  if (a.active > 0 && !a.famOff && (car.finished || car._?.left || away(car) || (car._?.resets || 0) !== a.famRes)) famEnd(race, S, car, true);
+  const t = a.t, dur = a.famDur;
+  a.famK = 0;
+  if (!(a.active > 0) || a.famOff || !(t < dur + FAM.out) || !tr?.samples) { famHide(S, a); return; }
+  a.famShown = true;
+  const lim = tr.width / 2 - 1.6, wall = (tr.wall ?? tr.width / 2 + 9.4) - 1.5, side = a.famSide, v = Math.max(0, car.speed || 0);
+  const q = trackS(tr, _fa.copy(car.pos).addScaledVector(car.vel, dt), car.trackIndex), s0 = q.s, ol = q.lat;   // drawn after this frame's physics
+  const k = Math.min(1, t / FAM.enter), e = easeOut(k), w = smooth01((k - 0.45) / 0.55);
+  const u = clamp((t - dur) / FAM.out, 0, 1), peel = smooth01(u), sc = 1 - smooth01((u - 0.6) / 0.4);
+  const lamp = t > 0.55 && t < 1.25 && (t - 0.55) % 0.35 < 0.17 ? 1 : 0.35;   // two flashes of the headlights on the way in
+  // rear: toward the closest car behind it (as this screen shows them)
+  const rear = f.allies[1], rAlong = -(FAM.rear + v * FAM.rearV + (rear?.hl || 2.1));   // behind the lagging chase camera
+  let tgt = ol, best = FAM.cover;
+  for (const c of race.cars) {
+    if (c === car || c.finished || c._?.left || away(c)) continue;
+    const r = trackS(tr, c.pos, c.trackIndex), g = famGap(tr, s0, r.s);
+    if (g > -rAlong - 1 && g < best) { best = g; tgt = r.lat; }
+  }
+  f.rl += clamp(clamp(tgt, -lim, lim) - f.rl, -FAM.dodge * dt, FAM.dodge * dt);
+  const along = -26 + (FAM.lead + 26) * e + 16 * u * u;
+  const line = famLine(tr, s0 + along), steady = clamp(line + (ol - line) * FAM.follow, -lim, lim);
+  const ll = clamp(clamp(ol + side * FAM.side, -lim, lim) + (steady - clamp(ol + side * FAM.side, -lim, lim)) * w + side * 4.5 * peel, -wall, wall);
+  famPlace(S, f.allies[0], tr, s0, along, ll, sc, dt, v, lamp);
+  const rl = clamp(clamp(ol - side * FAM.side, -lim, lim) + (f.rl - clamp(ol - side * FAM.side, -lim, lim)) * w - side * 4.5 * peel, -wall, wall);
+  famPlace(S, rear, tr, s0, -36 + (36 + rAlong) * e - 8 * u * u, rl, sc, dt, v, lamp);
+  if (rear) rear.solid = k >= 0.5 && u < 0.3;   // solid once it has come up level (cars behind it only: famBlock)
+  if (f.allies[0] && along > 3 && v > 8) a.famK = smooth01((FAM.coneOut - Math.abs(ol - ll)) / (FAM.coneOut - FAM.cone)) * (1 - peel);
+  if (a.famK > 0.3 && isHuman(car)) {   // the air rushing past, tucked in behind the lead
+    const sh = Math.sin(car.heading), ch = Math.cos(car.heading);
+    for (let n = Math.floor(45 * dt * a.famK + Math.random()); n > 0; n--) {
+      const x = rnd(-1.4, 1.4), y = rnd(0.3, 1.7), fwd = rnd(1, 4);
+      S.glow.emit(car.pos.x + sh * fwd - ch * x, car.pos.y + y, car.pos.z + ch * fwd + sh * x, car.vel.x * 0.5, 0, car.vel.z * 0.5, PAL.family[1], 0.3, 0.3, 0.06, 0, 0, 0.5);
+    }
+  }
+  if (t >= dur && !a.famSaid) {
+    a.famSaid = true;
+    if (isHuman(car)) flash(race, who(race, car) + 'ファミリー・ブースト!', COLOR.family);
+  }
+}
+
+// game.js collide(), every physics substep: the rear ally is solid for this client's own cars that come at it from
+// behind (a remote car's own client does it for that car). Shielded / phased / reflecting / robot cars go through.
+export function famBlock(race) {
+  const tr = race.track;
+  if (!tr?.samples) return;
+  for (const o of race.cars) {
+    const a = o.ability, al = a?.fam?.allies?.[1];
+    if (!al?.solid || a.famOff || !(a.active > 0) || faceStale(o)) continue;   // a frozen remote owner: like collide() NET_STALE
+    const p = trackPt(tr, trackS(tr, o.pos, o.trackIndex).s + al.along, al.lat), px = p.x, pz = p.z, fx = Math.sin(al.h), fz = Math.cos(al.h);
+    for (const c of race.cars) {
+      if (c === o || c.control === 'net' || c.finished || c._?.left || away(c) || c.mods?.noCollide || c.mods?.invulnerable || c.mods?.reflect) continue;
+      const dx = c.pos.x - px, dz = c.pos.z - pz;
+      if (dx * dx + dz * dz > 64 || dx * fx + dz * fz > 0) continue;   // not near, or level with it / past it
+      // a car it is catching (one its owner just passed, or it drives in on) isn't coming at it: it drives through
+      if ((c.vel.x - (o.vel?.x || 0)) * fx + (c.vel.z - (o.vel?.z || 0)) * fz <= (al.va || 0)) continue;
+      const hc = c._.hit, cx = Math.sin(c.heading), cz = Math.cos(c.heading);
+      let pen = 0, nx = 0, nz = 0;
+      for (let sa = -1; sa <= 1; sa += 2) for (const ob of hc.off) {
+        const ex = c.pos.x + cx * ob - px - fx * sa * al.off, ez = c.pos.z + cz * ob - pz - fz * sa * al.off, d = Math.hypot(ex, ez), pn = FAM.r + hc.r - d;
+        if (pn > pen) { pen = pn; nx = d > 1e-4 ? ex / d : -fx; nz = d > 1e-4 ? ez / d : -fz; }
+      }
+      if (pen <= 0) continue;
+      c.pos.x += nx * pen; c.pos.z += nz * pen;
+      const vrel = (c.vel.x - (o.vel?.x || 0)) * nx + (c.vel.z - (o.vel?.z || 0)) * nz;   // the ally moves with its owner
+      if (vrel >= 0) continue;
+      const S = st(race), ca = c.ability || initAbility(race, c), hit = S.time - (ca.famAt ?? -9) > FAM.again, sp0 = Math.hypot(c.vel.x, c.vel.z);
+      const j = -vrel * 1.3 + (hit ? FAM.bounce : 0);
+      c.vel.x += nx * j; c.vel.z += nz * j;
+      const cap = sp0 * (hit ? FAM.keep : 1), sp1 = Math.hypot(c.vel.x, c.vel.z);
+      if (sp1 > cap) c.vel.multiplyScalar(cap / sp1);   // never a push forward
+      if (!hit) continue;
+      if (isHuman(c)) {
+        if (S.time - (ca.famAt ?? -9) > 1.5) flash(race, who(race, c) + 'ファミリーにブロックされた!', COLOR.family);
+        race.hud?.shake?.(c, 0.25);
+      }
+      ca.famAt = S.time;
+      burst(S.glow, _w.set(c.pos.x - nx * hc.r, c.pos.y + 0.8, c.pos.z - nz * hc.r), 22, PAL.family, 6, 0.35, 0.45, 0.05);
+    }
+  }
 }
 
 // ---------- tint overlays for local players: slowed (timeslow) / caught in a domain / downforce speed lines ----------
@@ -1900,6 +2230,8 @@ export function initAbility(race, car) {
   if (id === 'tokyodive' && isHuman(car) && race.scene) {   // build the pocket course now, while loading (not mid-race)
     try { getDimension(race); } catch (e) { console.warn('[tokyodive] build failed', e); }
   }
+  // family: the allies' meshes now, while loading (game.js awaits race.loads); a remote owner's come with its message
+  if (id === 'family' && car.control !== 'net' && race.scene) famBuild(race, car, famPick(car));
   return car.ability;
 }
 
@@ -1949,6 +2281,7 @@ export function updateAbilities(race, dt) {
     if (a.active > 0) {
       a.t += dt;
       if (a.dive) diveStep(race, S, car, dt);   // may end it (came back)
+      if (a.fam) famStep(race, S, car, dt);     // may end it (owner reset / finished)
       if (a.active > 0) {
         applyOwn(race, car, a);
         a.active = Math.max(0, a.active - dt);
@@ -2088,13 +2421,19 @@ export function tryActivate(race, car) {
   if (a.id === 'domain' && isHuman(car)) screenFlash(race, car, DOMAIN_SCREEN);
   start(race, car, a.id, dur, pow, pose, target);
   if (race.net && car.control === 'p1') {
-    race.net.send({ t: 'ability', pid: race.localPid, id: a.id, x: r2(pose.x), y: r2(pose.y), z: r2(pose.z), h: r2(pose.h), dur: r2(dur), pow: r2(pow), ...(target?.pid != null && { tp: String(target.pid) }) });
+    race.net.send({ t: 'ability', pid: race.localPid, id: a.id, x: r2(pose.x), y: r2(pose.y), z: r2(pose.z), h: r2(pose.h), dur: r2(dur), pow: r2(pow), ...(target?.pid != null && { tp: String(target.pid) }),
+      ...(a.fam && { fam: famMsg(a.fam) }) });   // family: who comes
   }
   return true;
 }
 
 export function applyRemoteAbility(race, msg) {
   const def = ABILITIES[msg?.id];
+  if (msg?.id === 'family' && msg.pre) {   // famAnnounce: only builds the meshes, so it may come before GO
+    const car = race.cars.find(c => c.pid != null && c.pid === msg.pid);
+    if (car?.control === 'net' && car.ability?.id === 'family' && race.scene) famRemote(race, car, msg.fam);
+    return;
+  }
   // a straggler still counting down (forced start) has no clock running: a spin / slow / slick / fx applied now
   // would freeze until its own GO and land there. Same rule as tryActivate: nothing acts before GO.
   if (!def || !race.scene || race.state !== 'running') return;
@@ -2125,6 +2464,10 @@ export function applyRemoteAbility(race, msg) {
     const d = car?.ability?.dive;
     if (d?.remote) { d.out = new THREE.Vector3(pose.x, pose.y, pose.z); d.outAt = d.t; }
     return;
+  }
+  if (msg.id === 'family') {   // end: the owner was reset onto the road; else the allies it named (their meshes built now)
+    if (msg.end) { if (car?.ability?.fam && car.ability.active > 0) famEnd(race, st(race), car, false); return; }
+    if (car?.control === 'net') famRemote(race, car, msg.fam);
   }
   start(race, car, msg.id, dur, pow, pose, target);
   if (msg.id === 'timeslow' && slowedHumans(race)) flash(race, `${car ? car.name + 'の' : ''}${def.name}!`, COLOR.timeslow);
