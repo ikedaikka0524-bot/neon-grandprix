@@ -26,10 +26,12 @@ function fmtTime(s) {
   return `${m}:${String(sec).padStart(2, '0')}.${String(c).padStart(2, '0')}`;
 }
 
-// downforce: ability power (0 = off): grip 0.99 whatever the course, no drift / lateral slip / cornering scrub, more steering
+// downforce: ability power (0 = off): grip 0.99 whatever the course, no drift / lateral slip / cornering scrub, steering at
+// speed + DF_STEER x power
 // tow / towV (hellchain): pulled forward at tow m/s^2, throttle or not, but never past towV m/s (abilities.js zeroes it
 // under brakes / spin / off-road). assist: steering assist (-1..1) blended into a player's own steer. reflect: loses no
 // speed in car-car contact (like a shield) and the other car bounces off harder
+const DF_STEER = 1.0;
 const MODS0 = Object.freeze({ speedMul: 1, accelMul: 1, gripMul: 1, noCollide: false, noOffroadPenalty: false, invulnerable: false, downforce: 0, tow: 0, towV: 0, assist: 0, reflect: false });
 const CPU_NAMES = ['ハヤテ', 'ミズキ', 'ライデン', 'サクラ', 'ゴンタ', 'ツバサ', 'カエデ', 'レン', 'ヒカル', 'シズク'];
 const KEYSETS = {
@@ -993,8 +995,9 @@ function aiInput(ctx, car, dt) {
     if (along < 2 || along > (draft ? 28 : 20)) continue;
     if (pro && Math.abs(lat) < PASS.cone) follow = Math.min(follow, Math.max(0, o.speed + (along - 6) * 2));
     if (picked || (corner && o.speed > PASS.stopped)) continue;
-    if (draft && along > 10) {   // on a straight: tuck in behind it for the slipstream, pull out (below) once close
-      if (Math.abs(lat) < 6 && o.speed > 15) { c.laneTarget = clamp(c.lane + 2 * lat, -(W2 - 2), W2 - 2); c.laneT = 0.5; picked = true; }
+    if (draft && along > 10) {   // on a straight: tuck in behind it for the slipstream, pull out (below) once close (not
+      // behind a downforce car: dirty air, no tow)
+      if (Math.abs(lat) < 6 && o.speed > 15 && !o.mods.downforce) { c.laneTarget = clamp(c.lane + 2 * lat, -(W2 - 2), W2 - 2); c.laneT = 0.5; picked = true; }
       continue;
     }
     if (Math.abs(lat) < 2.6 && o.speed < car.speed + 3) {
@@ -1011,7 +1014,8 @@ function aiInput(ctx, car, dt) {
     }
   }
   c.lane += (c.laneTarget - c.lane) * damp(pro ? 2.5 : 1.3, dt);
-  const df = car.mods.downforce, G = df ? 0.99 : car.stats.grip * car.mods.gripMul * tr.grip, St = car.stats.steer * (1 + 0.25 * df);
+  // (mods still hold last frame's abilities here; gripMul: a downforce car's dirty air)
+  const df = car.mods.downforce, G = df ? 0.99 : car.stats.grip * car.mods.gripMul * tr.grip, St = car.stats.steer * (1 + DF_STEER * df);
   if (!pro) {
     const ahead = S[(idx + Math.round(35 / tr.spacing)) % N].curv;
     const apex = -Math.sign(ahead) * Math.min(1, Math.abs(ahead) * 70) * (W2 - 3);   // hug the inside of the next corner
@@ -1045,7 +1049,7 @@ function aiInput(ctx, car, dt) {
   let vAllowed = Infinity;
   if (!pro) {
     // (mods still hold last frame's abilities here) downforce: no scrub, so the limit is steering, not grip
-    const latLimit = (car.mods.downforce ? 0.99 * 1.45 : car.stats.grip * car.mods.gripMul * tr.grip) * 36 * 1.3;
+    const latLimit = (car.mods.downforce ? 0.99 * (1 + 1.8 * DF_STEER * car.mods.downforce) : car.stats.grip * car.mods.gripMul * tr.grip) * 36 * 1.3;
     for (let k = 2; k < range; k += 3) {
       const kap = Math.abs(S[(idx + k) % N].curv) + 1e-4;
       const vi = Math.sqrt(latLimit / kap);
@@ -1128,7 +1132,7 @@ function stepCar(ctx, car, dt) {
   const df = m.downforce || 0;
   const grip = (df ? 0.99 : st.grip * m.gripMul * tr.grip) * (spinning ? 0.2 : 1) * (off ? 0.85 : 1);
   // higher grip keeps more steering authority at speed
-  const steerRate = st.steer * Math.min(1, spd / 6) / (1 + spd / (50 * grip)) * (1 + 0.25 * df * Math.min(1, spd / 25));
+  const steerRate = st.steer * Math.min(1, spd / 6) / (1 + spd / (50 * grip)) * (1 + DF_STEER * df * Math.min(1, spd / 25));
   let yawT = c.steerS * steerRate * (vF < -0.5 ? -1 : 1);
   if (c.drift && df) endDrift(ctx, car);
   // drift only on purpose: hard steer + brake at speed (keyboard steering is always full lock), the player's own steer
@@ -1564,7 +1568,8 @@ function update(ctx, dt) {
     if ((car.stats.slipstream || car.stats.passive === 'draft') && car.speed > 15) {
       const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
       for (const o of cars) {
-        if (o === car || o._.left || o._.away) continue;   // away: in an ability's own space, not on this road
+        // away: in an ability's own space, not on this road; downforce: dirty air, no tow (abilities.js DF)
+        if (o === car || o._.left || o._.away || o.mods.downforce) continue;
         const dx = o.pos.x - car.pos.x, dz = o.pos.z - car.pos.z, along = dx * fx + dz * fz, lat = -dx * fz + dz * fx;
         if (along > 2 && along < 25 && Math.abs(lat) < 2.4 && Math.cos(o.heading - car.heading) > 0.8) { slip = car.stats.passive === 'draft' ? 0.16 : 0.08; break; }
       }
