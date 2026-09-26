@@ -22,13 +22,13 @@ export const ABILITIES = {
   thunderbolt: { name: 'サンダーボルト', desc: '1位の車（自分が1位なら2位）に雷を落としてスピン！自分は加速', fill: 26, duration: 1.5, power: 1.4 }, // duration = own boost s, power = target spin s
   magnet:   { name: 'マグネット',   desc: '前の車に吸い寄せられて急加速！一気に追いつく', fill: 18, duration: 3, power: 0.45 }, // power = own speed/accel bonus until ~8 m behind the car ahead
   domain:   { name: '結界展開',     desc: '自分を中心に巨大な結界を展開。中の相手は大きく減速し能力を封印される。自分は加速', fill: 28, duration: 6, power: 0.45 }, // power = speed reduction inside (max 0.6)
-  downforce: { name: 'ダウンフォース', desc: '7秒間 路面に吸いつき全開で加速。コーナーで減速せず、抜けるたびにさらに加速。スピン・体当たり・減速を受けない。後ろの車は乱気流でグリップを失う', fill: 17, duration: 7, power: 1 },   // power = x steering at speed (game.js DF_STEER), speed / accel and the corner-exit slingshot (abilities.js DF)
+  downforce: { name: 'ダウンフォース', desc: '7秒間 路面に吸いつき全開で加速。コーナーで減速せず、抜けるたびにさらに加速。スピン・体当たり・減速を受けない。後ろの車は乱気流でグリップを失う', fill: 22, duration: 7, power: 0.65 },   // power = x steering at speed (game.js DF_STEER), speed / accel and the corner-exit slingshot (abilities.js DF)
   robotdash: { name: 'ロボット・ダッシュ', desc: 'ロボットに変形！5秒間ぶつかった車を弾き飛ばし、状態異常を受けない。車に戻る瞬間に大加速', fill: 22, duration: 5, power: 0.5 }, // duration = robot time, power = speed/accel bonus for 1.5 s after
   hellchain: { name: 'ヘルチェーン', desc: '150m先まで届く炎の鎖で前の車を捕まえ、5秒間引き寄せる。外れる瞬間に相手を振り回してスピンさせ、一気に追い抜く', fill: 18, duration: 5, power: 0.5 }, // duration = chain s, power = target slow (max 0.6) / tow up to target speed +25% x power
   facewall: { name: 'フェイス・ウォール', desc: '左右に顔がどんどん増えて横一列に並び、回転しながら道をふさぐ。後ろの車は前に出られない', fill: 24, duration: 5, power: 1 }, // duration = wall time; power unused
-  tokyodive: { name: 'トーキョー・ダイブ', desc: 'ネオンのゲートから夜の東京の異空間へ6秒間ダイブ。戻ると大きく前方へ飛び出し、異空間で走った距離の分だけさらに前へ。着地後2秒間はネオン・ブーストで加速し、最初の1.5秒は無敵', fill: 20, duration: 6, power: 1 }, // power = multiplier on the jump's pocket part (and on the landing boost, up to 1) (abilities.js DIVE)
+  tokyodive: { name: 'トーキョー・ダイブ', desc: 'ネオンのゲートから夜の東京の異空間へ6秒間ダイブ。戻ると大きく前方へ飛び出し、異空間で走った距離の分だけさらに前へ。着地後2秒間はネオン・ブーストで加速し、最初の1.5秒は無敵', fill: 22, duration: 6, power: 1 }, // power = multiplier on the jump's pocket part (and on the landing boost, up to 1) (abilities.js DIVE)
   reflect: { name: 'リフレクト', desc: 'ボディの鏡が光り、4秒間 自分を狙った攻撃をぜんぶ撃った相手にはね返す（ぶつかられても減速しない）', fill: 22, duration: 4, power: 1 }, // power = strength of what bounces back (x the attack's own; abilities.js REFLECT)
-  family: { name: 'ファミリー', desc: '「ファミリー」の車が2台かけつけて一緒に走る。前の仲間の後ろで強力なスリップストリーム、後ろの仲間は追ってくる車をブロック', fill: 22, duration: 7, power: 1 }, // duration = formation s, power = drafting strength (abilities.js FAM)
+  family: { name: 'ファミリー', desc: '「ファミリー」の車が2台かけつけて一緒に走る。前の仲間の後ろで強力なスリップストリーム、後ろの仲間は追ってくる車をブロック', fill: 24, duration: 7, power: 1 }, // duration = formation s, power = drafting strength (abilities.js FAM)
 };
 
 // Passive traits (R cars).

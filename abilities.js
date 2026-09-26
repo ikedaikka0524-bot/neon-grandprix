@@ -1782,17 +1782,43 @@ function start(race, car, id, dur, pow, pose, target = null) {
 // ---------- tokyodive ----------
 // A gate opens ahead, the car drives in (DIVE.lead s) and is away: a local driver races the pocket course
 // (tokyo-dimension.js, car._.track), a CPU is parked out of the world. It comes back along the track, from where it went
-// in, by top speed x DIVE.base x the ability's own 6 s (pays for the time away; reaching the exit early keeps all of it,
-// so a quick pocket run is the skill bonus) + power x the farthest it got in there x DIVE.inside. Back on the road it
+// in, as far as the car itself took so many seconds to drive last time round (roadAhead: its own speed at each track sample
+// when it last passed, a.lapV; not yet driven: its top speed capped by the bend's grip limit), so a dive is worth the same
+// seconds on a fast course as on a slow twisty one: DIVE.base x the ability's own 6 s (pays for the time away; reaching
+// the exit early keeps all of it, so a quick pocket run is the skill bonus) + power x the farthest it got in there / cpuIn
+// x DIVE.inside (the pocket's seconds at its clean pace). Back on the road it
 // comes out at full speed (the corners ahead still cap it, landSpeed) into a 'ネオン・ブースト': speed / accel + boost
-// (x power, at most 1) for boostT s (x node a2), the first guard s of it immune like a shield (diveGuard). Net ~+4.2 s
-// over just driving on, ~+5.3 s with every node (CONTRACT.md). Power and node a2 touch only the pocket part and the boost. A CPU
+// (x power, at most 1) for boostT s (x node a2), the first guard s of it immune like a shield (diveGuard). Net ~+2.5 s
+// per dive over just driving on, ~+3.4 s with every node (oni AI; CONTRACT.md). Power and node a2 touch only the pocket part and the boost. A CPU
 // drives it like a clean run: DIVE.cpuIn m/s, back at the exit (RUN). A remote diver is only hidden here: its own client
 // runs the dive and sends { out: 1 } with where it came back (every client then shows the boost and the guard).
 // cpuIn is per real second (the pocket's clock runs 1.25x): 54 = ~302 m in 5.6 s, a clean pocket run
-const DIVE = { lead: 0.3, minSpeed: 15, base: 0.8, inside: 0.8, cpuIn: 54, remoteSlack: 1.5, near: 25, boost: 0.4, boostT: 2, guard: 1.5 };
+const DIVE = { lead: 0.3, minSpeed: 15, base: 0.7, inside: 0.7, cpuIn: 54, remoteSlack: 1.5, near: 25, boost: 0.4, boostT: 2, guard: 1.5 };
 const DIVE_T = ABILITIES.tokyodive.duration;
-const diveGain = (car, d, t, inside) => Math.min(t, DIVE_T) * (car.stats?.top || 60) * DIVE.base + d.pow * inside * DIVE.inside;
+const diveGain = (race, car, d, t, inside) => roadAhead(race.track, car, d.entry?.i ?? car.trackIndex, Math.min(t, DIVE_T) * DIVE.base + d.pow * inside / DIVE.cpuIn * DIVE.inside);
+// m the car covers in sec s on from sample i at its own last speed there (a.lapV), or where it hasn't been yet its top
+// speed, no faster than the bend's grip limit (as landSpeed)
+function roadAhead(tr, car, i, sec) {
+  const S = tr?.samples, top = car.stats?.top || 60, V = car.ability.lapV;
+  if (!S?.length) return top * sec;
+  const N = S.length, lat = (car.stats?.grip || 0.85) * (tr.grip || 1) * 36 * 1.3;
+  let d = 0;
+  for (let k = i; sec > 0 && d < tr.length; k++, d += tr.spacing) sec -= tr.spacing / (V?.[k % N] || Math.min(top, Math.sqrt(lat / (Math.abs(S[k % N].curv || 0) + 1e-4))));
+  return d;
+}
+// its speed at each sample it drives past (samples skipped between two frames get the same, up to 30 m: a slow frame,
+// not the jump itself), for roadAhead: not in the pocket, at most its top speed (a boost or a draft there last lap
+// doesn't stretch the next jump; the leaderboard lap bound, CONTRACT), and only once it is up to speed (from the grid or
+// a reset onto the road it starts at 0: that isn't its pace there, so those samples keep roadAhead's grip-limit guess)
+function lapSpeed(race, car, a) {
+  const tr = race.track, N = tr?.samples?.length, i = car.trackIndex, top = car.stats?.top || 60, res = car._?.resets || 0;
+  if (!N || i == null) return;
+  if (a.lapRes !== res) { a.lapRes = res; a.lapGo = false; }
+  if (!(a.lapGo ||= car.speed > 0.9 * top * (car._?.skill || 1))) return;
+  const V = (a.lapV ||= new Float32Array(N)), gap = (i - (a.lapI ?? i) + N) % N, v = clamp(car.speed, DIVE.minSpeed, top);
+  for (let k = gap * tr.spacing < 30 ? gap : 0; k >= 0; k--) V[(i - k + N) % N] = v;
+  a.lapI = i;
+}
 // the finish counts where it lands: a flag closer than a clean dive's time away (at this race's pace) comes sooner by driving
 const diveLate = (race, car) => car.progress > 0.2 && (race.track?.laps - car.progress) * race.time / car.progress < DIVE.lead + RUN / DIVE.cpuIn;
 const DIVE_SCREEN = ['radial-gradient(ellipse at center, rgba(255,255,255,0.95), rgba(255,140,40,0.75) 40%, rgba(255,40,160,0.7) 75%, rgba(25,10,40,0.9) 100%)',
@@ -1869,7 +1895,7 @@ function diveStep(race, S, car, dt) {
       if (vf < 0) car.vel.addScaledVector(q.tan, -vf);
     }
     d.maxS = Math.max(d.maxS, s);
-    diveHud(race, S, car, `異空間ダイブ　残り ${Math.max(0, d.dur - d.inT).toFixed(1)}秒　+${Math.round(diveGain(car, d, d.inT, d.maxS - d.s0))}m`);
+    diveHud(race, S, car, `異空間ダイブ　残り ${Math.max(0, d.dur - d.inT).toFixed(1)}秒　+${Math.round(diveGain(race, car, d, d.inT, d.maxS - d.s0))}m`);
     if (s >= D.exitS) { diveOut(race, S, car); return; }
   }
   if (d.inT >= (d.D ? d.dur : Math.min(d.dur, RUN / DIVE.cpuIn))) diveOut(race, S, car);
@@ -1906,7 +1932,7 @@ function diveOut(race, S, car) {
   const a = car.ability, d = a.dive, tr = race.track, L = tr?.length || 1;
   const e = d.entry || { x: car.pos.x, y: car.pos.y, z: car.pos.z, h: car.heading, i: car.trackIndex };
   const inside = d.D ? d.maxS - d.s0 : Math.min(DIVE.cpuIn * d.inT, RUN);
-  const dist = clamp(diveGain(car, d, DIVE_T, inside) || 0, 0, L * 0.9);   // reaching the exit early still earns the full base
+  const dist = clamp(diveGain(race, car, d, DIVE_T, inside) || 0, 0, L * 0.9);   // reaching the exit early still earns the full base
   const dest = warpDest(race, e, dist);
   // a difficulty CPU (game.js racing line) lands on its line, heading along it: at the offset it went in with it landed
   // off the line, often mid-corner, and the line-speed corner ran it into the wall (~3x the wall hits right after)
@@ -1994,10 +2020,10 @@ function diveHud(race, S, car, text) {
 // aiInput's corner limit honours gripMul; a planted car's dirty air, applied after this, takes DF.grip of the total).
 // The rear one is solid for this client's own cars coming at it from behind (famBlock, from game.js collide): pushed
 // back, bounced, speed x keep at most once per `again` s. After dur they peel off to the sides and
-// vanish, and the owner gets a parting boost (partPow for part s). Net ~+3.5 s per use at stock (circuit / suzuka /
-// monza, CONTRACT.md). Not race cars: not in the standings or on the map, nothing targets them. Gone at once when the
+// vanish, and the owner gets a parting boost (partPow for part s). Net ~+2.7 s per use at stock, ~+3.7 s with every
+// node (oni AI, circuit / suzuka / monza; CONTRACT.md). Not race cars: not in the standings or on the map, nothing targets them. Gone at once when the
 // owner finishes, dives, leaves or is reset onto the road.
-const FAM = { lead: 12, rear: 12.5, rearV: 0.085, follow: 0.7, enter: 0.9, out: 0.9, part: 2, partPow: 0.5, top: 0.55, acc: 2, grip: 1.8, cone: 2.4, coneOut: 4,
+const FAM = { lead: 12, rear: 12.5, rearV: 0.085, follow: 0.7, enter: 0.9, out: 0.9, part: 2, partPow: 0.25, top: 0.35, acc: 1.4, grip: 1.8, cone: 2.4, coneOut: 4,
   side: 3.8, cover: 60, dodge: 6, keep: 0.75, bounce: 3, again: 0.7, r: 1 };
 COLOR.family = '#3d8bff';
 PAL.family = pal('#ffffff', '#cfe6ff', '#6fb0ff', '#2f6bff', '#8fe0ff');
@@ -2358,6 +2384,7 @@ export function updateAbilities(race, dt) {
 
   for (const car of race.cars) {
     const a = car.ability || initAbility(race, car);
+    if (a.id === 'tokyodive' && running && !a.away && car.control !== 'net') lapSpeed(race, car, a);
     if (car.spin > 0) car.spin = Math.max(0, car.spin - dt);
     if (a.bounceT > 0) a.bounceT = Math.max(0, a.bounceT - dt);   // a reflected slow
     if (a.active > 0) {
