@@ -16,19 +16,19 @@ export const ABILITIES = {
   nitro:    { name: 'ニトロ',       desc: '短時間の大加速',                           fill: 20, duration: 2.5, power: 0.55 },
   oil:      { name: 'オイル',       desc: '後ろにオイルを撒く。踏んだ車はスピン',     fill: 16, duration: 15,  power: 1.2 },  // duration = slick lifetime, power = spin seconds
   shield:   { name: 'シールド',     desc: '衝突・罠・スローを無効化',                 fill: 18, duration: 5,   power: 1 },
-  warp:     { name: 'ワープ',       desc: 'コースの前方へテレポート',                 fill: 24, duration: 0,   power: 60 },   // power = meters along track
-  timeslow: { name: 'タイムスロー', desc: '自分以外の全員を数秒スローに',             fill: 26, duration: 3,   power: 0.4 },  // power = speed reduction (0.4 -> x0.6)
-  phase:    { name: 'ファントム',   desc: 'すり抜け＆コース外でも減速しない',         fill: 22, duration: 5,   power: 0.10 }, // power = extra speed
-  thunderbolt: { name: 'サンダーボルト', desc: '1位の車（自分が1位なら2位）に雷を落としてスピン！自分は加速', fill: 26, duration: 1.5, power: 1.4 }, // duration = own boost s, power = target spin s
+  warp:     { name: 'ワープ',       desc: 'コースのずっと前方へワープ（自分の走りで約2秒分の距離）。出た直後2.5秒間 加速', fill: 27, duration: 2.5, power: 1 },   // duration = exit boost s, power = x the exit boost (at most 1); the jump / boost: abilities.js WARP
+  timeslow: { name: 'タイムスロー', desc: '4秒間 自分以外の全員の時間を遅らせ、いつもの半分ほどのペースに。その間 自分は加速し、ほかの車をすり抜けて走れる', fill: 28, duration: 4, power: 0.45 },  // power = slow: x(1 - power) of each car's own recent pace; duration = that slow / the owner's pass-through + boost (nodes a2 / a3 raise only the owner's part: abilities.js TSLOW)
+  phase:    { name: 'ファントム',   desc: '5秒間 霊体になり、車も草地もすり抜けて減速しない。最高速・加速・グリップが大きく上がり、実体に戻る瞬間に2秒間の実体化ダッシュ', fill: 28, duration: 5, power: 0.7 }, // duration = ghost s, power = the materialise dash's speed / accel bonus (abilities.js PH: the ghost's top / accel / grip, dash s)
+  thunderbolt: { name: 'サンダーボルト', desc: '1位の車（自分が1位なら2位）に雷を落としてスピン！自分は加速し、命中すれば雷のパワーを吸収してさらに大加速', fill: 29, duration: 2, power: 1.4 }, // duration = own boost s (abilities.js THUNDER: boost, charge once the bolt lands), power = target spin s
   magnet:   { name: 'マグネット',   desc: '前の車に吸い寄せられて急加速！一気に追いつく', fill: 18, duration: 3, power: 0.45 }, // power = own speed/accel bonus until ~8 m behind the car ahead
   domain:   { name: '結界展開',     desc: '自分を中心に巨大な結界を展開。中の相手は大きく減速し能力を封印される。自分は加速', fill: 28, duration: 6, power: 0.45 }, // power = speed reduction inside (max 0.6)
-  downforce: { name: 'ダウンフォース', desc: '7秒間 路面に吸いつき全開で加速。コーナーで減速せず、抜けるたびにさらに加速。スピン・体当たり・減速を受けない。後ろの車は乱気流でグリップを失う', fill: 22, duration: 7, power: 0.65 },   // power = x steering at speed (game.js DF_STEER), speed / accel and the corner-exit slingshot (abilities.js DF)
-  robotdash: { name: 'ロボット・ダッシュ', desc: 'ロボットに変形！5秒間ぶつかった車を弾き飛ばし、状態異常を受けない。車に戻る瞬間に大加速', fill: 22, duration: 5, power: 0.5 }, // duration = robot time, power = speed/accel bonus for 1.5 s after
-  hellchain: { name: 'ヘルチェーン', desc: '150m先まで届く炎の鎖で前の車を捕まえ、5秒間引き寄せる。外れる瞬間に相手を振り回してスピンさせ、一気に追い抜く', fill: 18, duration: 5, power: 0.5 }, // duration = chain s, power = target slow (max 0.6) / tow up to target speed +25% x power
-  facewall: { name: 'フェイス・ウォール', desc: '左右に顔がどんどん増えて横一列に並び、回転しながら道をふさぐ。後ろの車は前に出られない', fill: 24, duration: 5, power: 1 }, // duration = wall time; power unused
-  tokyodive: { name: 'トーキョー・ダイブ', desc: 'ネオンのゲートから夜の東京の異空間へ6秒間ダイブ。戻ると大きく前方へ飛び出し、異空間で走った距離の分だけさらに前へ。着地後2秒間はネオン・ブーストで加速し、最初の1.5秒は無敵', fill: 22, duration: 6, power: 1 }, // power = multiplier on the jump's pocket part (and on the landing boost, up to 1) (abilities.js DIVE)
+  downforce: { name: 'ダウンフォース', desc: '7秒間 路面に吸いつき全開で加速。コーナーで減速せず、抜けるたびにさらに加速。スピン・体当たり・減速を受けない。後ろの車は乱気流でグリップを失う', fill: 31, duration: 7, power: 0.65 },   // power = x steering at speed (game.js DF_STEER), speed / accel and the corner-exit slingshot (abilities.js DF)
+  robotdash: { name: 'ロボット・ダッシュ', desc: 'ロボットに変形！5秒間 速く走りコーナーでも滑らず、ぶつかった車を弾き飛ばし、状態異常を受けない。車に戻る瞬間に大加速', fill: 22, duration: 5, power: 1 }, // duration = robot time, power = scale of the robot's run and of the dash after it (abilities.js ROBOT)
+  hellchain: { name: 'ヘルチェーン', desc: '150m先まで届く炎の鎖で前の車を捕まえ、一気にたぐり寄せる（最大5秒）。外れる瞬間に相手を横へ振り回してスピンさせ、スリングショットで追い抜く', fill: 25, duration: 5, power: 0.5 }, // duration = chain s (max), power = target slow (max 0.6) / tow up to target speed +25% x power; snap / slingshot / fling: abilities.js HELL, HELL_SLING
+  facewall: { name: 'フェイス・ウォール', desc: '左右に顔がどんどん増えて横一列に並び、回転しながら後ろへ下がって道をふさぐ。後ろの車は前に出られず、ぶつかるとはじき返されて減速。その間に自分はダッシュで引き離す', fill: 24, duration: 5, power: 1 }, // duration = wall time, power = x the knock-back slow (abilities.js FACE: the row's drop back, the owner's dash)
+  tokyodive: { name: 'トーキョー・ダイブ', desc: 'ネオンのゲートから夜の東京の異空間へ6秒間ダイブ。戻ると大きく前方へ飛び出し、異空間で走った距離の分だけさらに前へ。着地後2秒間はネオン・ブーストで加速し、最初の1.5秒は無敵', fill: 28, duration: 6, power: 1 }, // power = multiplier on the jump's pocket part (and on the landing boost, up to 1) (abilities.js DIVE)
   reflect: { name: 'リフレクト', desc: 'ボディの鏡が光り、4秒間 自分を狙った攻撃をぜんぶ撃った相手にはね返す（ぶつかられても減速しない）', fill: 22, duration: 4, power: 1 }, // power = strength of what bounces back (x the attack's own; abilities.js REFLECT)
-  family: { name: 'ファミリー', desc: '「ファミリー」の車が2台かけつけて一緒に走る。前の仲間の後ろで強力なスリップストリーム、後ろの仲間は追ってくる車をブロック', fill: 24, duration: 7, power: 1 }, // duration = formation s, power = drafting strength (abilities.js FAM)
+  family: { name: 'ファミリー', desc: '「ファミリー」の車が2台かけつけて一緒に走る。前の仲間の後ろで強力なスリップストリーム、後ろの仲間は追ってくる車をブロック', fill: 30, duration: 7, power: 1 }, // duration = formation s, power = drafting strength (abilities.js FAM)
 };
 
 // Passive traits (R cars).
@@ -57,14 +57,14 @@ export const CARS = [
   // len / w: a box truck 6 m long, 2.3 m wide (carmodel.js fit + trimWidth, game.js collision circles + chase camera); the rest are 4.2 m
   { id: 'sr_mirror', name: 'リフレクト号', rarity: 'SR', body: 'truck', color: '#ffffff', ability: 'reflect', passive: null, len: 6, w: 2.3, base: { top: 64, accel: 17, grip: 0.84, steer: 2.0, mass: 2.0 } },
   { id: 'ur_warp',  name: 'ディメンション・シャーク', rarity: 'UR', body: 'shark', color: '#4cc9f0', ability: 'warp', passive: null, base: { top: 70, accel: 21, grip: 0.90, steer: 2.3, mass: 1.1 } },
-  { id: 'ur_time',  name: 'クロノ・ドラゴン',  rarity: 'UR', body: 'dragon',  color: '#7b2cbf', ability: 'timeslow', passive: null, base: { top: 69, accel: 21, grip: 0.90, steer: 2.3, mass: 1.2 } },
+  { id: 'ur_time',  name: 'クロノ・ドラゴン',  rarity: 'UR', body: 'dragon',  color: '#7b2cbf', ability: 'timeslow', passive: null, base: { top: 72, accel: 21, grip: 0.90, steer: 2.3, mass: 1.2 } },
   { id: 'ur_phase', name: 'スシ・ファントム',  rarity: 'UR', body: 'sushi',   color: '#ff8fa3', ability: 'phase', passive: null,    base: { top: 71, accel: 20, grip: 0.89, steer: 2.4, mass: 1.0 } },
   { id: 'ur_thunder', name: 'サンダー・ドラゴンX', rarity: 'UR', body: 'dragon', color: '#ffd23f', ability: 'thunderbolt', passive: null, base: { top: 74, accel: 22, grip: 0.90, steer: 2.4, mass: 1.3 } },
-  { id: 'ur_domain', name: 'アビス・サンクチュアリ', rarity: 'UR', body: 'tank', color: '#3b1466', ability: 'domain', passive: null, base: { top: 71, accel: 21, grip: 0.90, steer: 2.3, mass: 1.3 } },
+  { id: 'ur_domain', name: 'アビス・サンクチュアリ', rarity: 'UR', body: 'tank', color: '#3b1466', ability: 'domain', passive: null, base: { top: 72, accel: 21, grip: 0.90, steer: 2.4, mass: 1.3 } },
   { id: 'ur_graphite', name: 'グラファイト・GT', rarity: 'UR', body: 'sports', color: '#3a3d42', ability: 'downforce', passive: null, base: { top: 72, accel: 21, grip: 0.90, steer: 2.3, mass: 1.1 } },
-  { id: 'ur_changer', name: 'レトロ・チェンジャー', rarity: 'UR', body: 'kei', color: '#efe6cf', ability: 'robotdash', passive: null, base: { top: 67, accel: 20, grip: 0.88, steer: 2.3, mass: 1.6 } },
-  { id: 'ur_inferno', name: 'インフェルノ・キャット', rarity: 'UR', body: 'muscle', color: '#d9151b', ability: 'hellchain', passive: null, base: { top: 73, accel: 23, grip: 0.84, steer: 2.0, mass: 1.6 } },
-  { id: 'ur_megaface', name: 'メガフェイス', rarity: 'UR', body: 'kei', color: '#b9744f', ability: 'facewall', passive: null, base: { top: 68, accel: 20, grip: 0.86, steer: 2.1, mass: 1.5 } },
+  { id: 'ur_changer', name: 'レトロ・チェンジャー', rarity: 'UR', body: 'kei', color: '#efe6cf', ability: 'robotdash', passive: null, base: { top: 70, accel: 21, grip: 0.88, steer: 2.3, mass: 1.6 } },
+  { id: 'ur_inferno', name: 'インフェルノ・キャット', rarity: 'UR', body: 'muscle', color: '#d9151b', ability: 'hellchain', passive: null, base: { top: 73, accel: 23, grip: 0.84, steer: 2.4, mass: 1.6 } },
+  { id: 'ur_megaface', name: 'メガフェイス', rarity: 'UR', body: 'kei', color: '#b9744f', ability: 'facewall', passive: null, base: { top: 73, accel: 22, grip: 0.88, steer: 2.4, mass: 1.5 } },
   { id: 'ur_fortune', name: 'フォーチュン・ドリフター', rarity: 'UR', body: 'sports', color: '#ff8a00', ability: 'tokyodive', passive: 'drift', base: { top: 72, accel: 22, grip: 0.88, steer: 2.5, mass: 1.1 } },
   { id: 'ur_streak', name: 'ブルー・ストリークR', rarity: 'UR', body: 'sports', color: '#a9aeb5', ability: 'family', passive: null, base: { top: 73, accel: 22, grip: 0.90, steer: 2.3, mass: 1.2 } },
 ];

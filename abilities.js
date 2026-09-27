@@ -8,18 +8,28 @@ import { getDimension, makePortal, ORIGIN, RUN } from './tokyo-dimension.js';
 
 const OIL_RADIUS = 3, OIL_BEHIND = 4.2;
 const DRIFT_CHARGE = 1.2;   // extra gauge fill rate while drifting (stats.driftCharge)
-const THUNDER_BOOST = 0.3;  // thunderbolt: own speedMul / accelMul bonus while active
+// thunderbolt: own speedMul / accelMul bonus while active; `charge` instead once its bolt has landed (thunderCharge)
+const THUNDER = { boost: 0.3, charge: 0.55 };
 const MAGNET_RANGE = 150, MAGNET_CATCH = 8;   // m along the track: pick a car ahead within range, pull until this close
 const MAGNET_LEAD = { dur: 1, pow: 0.15 };    // nobody ahead: short weak boost instead
 const MAGNET_DOCK = 16;   // m/s^2: the pull closes in no faster than this much braking could shed by MAGNET_CATCH
-const DOMAIN_R = 45, DOMAIN_BOOST = 0.2, DOMAIN_MAX_SLOW = 0.6;
-const ROBOT_T = 0.35, ROBOT_BOOST = 1.5;   // robotdash: transform time each way, boost after changing back
+const DOMAIN_R = 60, DOMAIN_BOOST = 0.3, DOMAIN_MAX_SLOW = 0.6;   // dome radius m, owner speed / accel bonus, cap on the slow
+const DOMAIN_PASS = 150;   // CPU: flat-out m it needs to get past a rival ahead it seals (slowed in a corner, that car only holds it up)
+// robotdash: transform time each way; x power: the robot's run (speed / accel / grip: its feet don't slide) and the dash
+// after changing back (dashT s x duration / 5, i.e. node a2 lengthens it too)
+const ROBOT_T = 0.35, ROBOT = { run: 0.15, acc: 0.8, grip: 0.9, dashT: 2.5, dashTop: 0.5, dashAcc: 2 };
+// robot / ghost: the form's extra grip fades out over the first GRIP_OUT s of the dash after it (dropped at once, mid-corner
+// at the form's corner speed and with the dash kicking in, the AI swung across the road into Monaco's barrier at 90+ m/s)
+const GRIP_OUT = 1, gripOut = s => Math.max(0, 1 - s / GRIP_OUT);
 const KNOCK = { side: 12, spin: 0.4, keep: 0.7, again: 0.6 };   // robot hit: sideways m/s, spin s, speed kept, s before the same car again
 // hellchain (m, s): pick a car ahead within range, snap when this close; tow spring point behind it, one lane beside it;
 // chain flight time; max slow on the target; tow spring 1/s^2 and its cap (x power) m/s^2
-// reel: extra closing speed over the target = min(reelMax, reel * (gap - follow)) x power/0.4 — the chain winds the owner in
-const HELL = { range: 150, snap: 6, follow: 7, lane: 3, hook: 0.2, maxDrag: 0.6, k: 4, pull: 150, reel: 1.0, reelMax: 45 };
-const HELL_SLING = { dur: 2, pow: 0.6, whip: 1.0 }, HELL_MISS = { dur: 1, pow: 0.15 };   // after the snap / nobody ahead or a shrugged-off chain
+// reel: extra closing speed over the target = min(reelMax, reel * (gap - follow)) x power/0.4 — the chain winds the owner in;
+// it lets go (the snap) once it has wound the owner within `let` m of the target along the track, still at speed
+const HELL = { range: 150, snap: 6, follow: 7, lane: 3, hook: 0.2, maxDrag: 0.6, k: 4, pull: 150, reel: 1.0, reelMax: 45, let: 12 };
+// after the snap: slingshot +pow speed / accel for dur s; the target is whipped round (spin whip s) and swung fling m/s
+// sideways off the owner's line, so the slingshot goes past it / nobody ahead or a shrugged-off chain
+const HELL_SLING = { dur: 2, pow: 0.75, whip: 1.0, fling: 12 }, HELL_MISS = { dur: 1, pow: 0.15 };
 const LINKS = 240, LINK_PITCH = 0.36, CHAIN_SEG = 24;
 // downforce, planted for its duration: full grip and steering at speed (game.js DF_STEER, mods.downforce = power), top +
 // `top`, accel + `acc` (x power), no spin / knock / slow (mods.invulnerable). Slingshot: `turn` rad through a corner
@@ -28,6 +38,11 @@ const LINKS = 240, LINK_PITCH = 0.36, CHAIN_SEG = 24;
 // grip and get no slipstream from it (game.js); each client applies it to its own cars from the owner's ability state and
 // pose (no messages). CPU rule: `twisty` rad of turning in the next `look` m. Value per use: CONTRACT.md 'Downforce (v8)'
 const DF = { top: 0.45, acc: 1.0, corner: 1 / 250, turn: 0.25, sling: 2, slingAcc: 0.6, slingTop: 0.2, look: 300, twisty: 1.2, wake: 25, wide: 2.6, spread: 0.04, grip: 0.3 };
+// phase (スシ・ファントム): a ghost for its duration (a.phaseDur): through cars (noCollide) and over the grass with no
+// offroad penalty, top + `top`, accel + `acc`, grip + `grip`; then it materialises into a dash: speed / accel + power
+// for `exitT` s (part of its active time: no gauge meanwhile), so node a3 raises the dash only. `through`: m between
+// centres that counts as slipping through a car (visual only). Value per use: CONTRACT.md 'Phase (v9)'
+const PH = { top: 0.3, acc: 3.0, grip: 1.4, exitT: 2, through: 3 };
 const CURB_CURV = 1 / 130, CURB_SPAN = 14;   // world.js lays curbs where |curv| exceeds this within ± this many samples
 const COLOR = {
   boost: '#5fe3ff', nitro: '#ff9a3c', oil: '#b6ff3b', shield: '#5ef1ff',
@@ -67,7 +82,9 @@ const isHuman = c => c.control === 'p1' || c.control === 'p2';
 const isRobot = c => c.ability?.id === 'robotdash' && c.ability.active > 0 && c.ability.t < c.ability.robotDur + ROBOT_T;
 // shield / phase / robot form shrug a hellchain off; so does diving into tokyodive's own space (no whip / slow in there)
 // and its landing guard, and a planted downforce car (the chain can't hook it)
-const chainProof = c => isRobot(c) || away(c) || diveGuard(c) || planted(c) || (c.ability?.active > 0 && (c.ability.id === 'shield' || c.ability.id === 'phase'));
+const chainProof = c => isRobot(c) || away(c) || diveGuard(c) || planted(c) || phased(c) || (c.ability?.active > 0 && c.ability.id === 'shield');
+// phase: still a ghost (after it, during the dash, it is solid again)
+const phased = c => c?.ability?.id === 'phase' && c.ability.active > 0 && c.ability.t < c.ability.phaseDur;
 // downforce (see DF): planted on the road - takes no spin, knock or slow (mods.invulnerable, like a shield; the face wall
 // still holds it) and leaves dirty air behind it
 const planted = c => c?.ability?.id === 'downforce' && c.ability.active > 0;
@@ -681,15 +698,16 @@ function carVisuals(race, S, car, dt) {
   a.dfVis += ((act === 'downforce' ? Math.min(1, Math.abs(car.speed) / 45) * (a.dfSling > 0 ? 1 : 0.7) : 0) - a.dfVis) * Math.min(1, dt * 5);   // speed lines
   if (a.dfVis < 0.005) a.dfVis = 0;
   if (!act && !a.slowVis && !a.fx && !(car.spin > 0) && a.id !== 'family') return;
-  if (a.id === 'phase') setPhase(car, act === 'phase');
+  if (a.id === 'phase') setPhase(car, phased(car));
   const fx = carFx(car);
   if (!fx) return;
   const t = S.time, sh = Math.sin(car.heading), ch = Math.cos(car.heading);
   const vx = car.vel ? car.vel.x : sh * car.speed, vz = car.vel ? car.vel.z : ch * car.speed;
   const world = (p, out = _v) => out.set(car.pos.x + p.z * sh + p.x * ch, car.pos.y + p.y, car.pos.z + p.z * ch - p.x * sh);
 
-  if (a.id === 'boost' || a.id === 'nitro' || a.id === 'hellchain') {
-    const nitro = a.id !== 'boost', g = flames(S, fx, nitro), on = act === a.id && !a.chained;
+  if (a.id === 'boost' || a.id === 'nitro' || a.id === 'hellchain' || a.id === 'robotdash' || a.id === 'facewall' || a.id === 'warp') {   // robotdash: its dash; warp: the exit boost (blue)
+    const nitro = a.id !== 'boost' && a.id !== 'warp', g = flames(S, fx, nitro), on = act === a.id && !a.chained && (a.id !== 'robotdash' || a.t >= a.robotDur + ROBOT_T)
+      && (a.id !== 'facewall' || a.t < FACE.drop);   // facewall: its dash
     g.visible = on;
     if (on) {
       const len = (nitro ? 1.8 : 1.1) * Math.min(1, a.t * 6) * (a.active < 0.3 ? a.active / 0.3 : 1);
@@ -741,12 +759,38 @@ function carVisuals(race, S, car, dt) {
     }
   }
 
-  if (a.id === 'phase' && act === 'phase' && a.phaseSwap) {
-    const o = (0.3 + 0.12 * Math.sin(t * 13) + rnd(0, 0.06)) * (a.active < 1 ? (Math.sin(t * 30) > 0 ? 1.8 : 0.6) : 1);
+  if (a.id === 'phase' && act === 'phase' && a.phaseSwap) {   // the ghost: see-through, blinking before it materialises
+    const o = (0.3 + 0.12 * Math.sin(t * 13) + rnd(0, 0.06)) * (a.phaseDur - a.t < 1 ? (Math.sin(t * 30) > 0 ? 1.8 : 0.6) : 1);
     for (const s of a.phaseSwap) for (const m of [].concat(s.clone)) m.opacity = (m.userData.baseOpacity ?? 1) * o;
-    if (Math.random() < dt * 30) {
+    for (let n = Math.floor(70 * dt + Math.random()); n > 0; n--) {   // an afterimage of pink motes hanging behind it
       world(_w.set(fx.center.x + rnd(-1, 1) * fx.size.x * 0.5, rnd(0.2, fx.box.max.y), fx.center.z + rnd(-1, 1) * fx.size.z * 0.5));
-      S.glow.emit(_v.x, _v.y, _v.z, vx * 0.5, rnd(0.5, 1.5), vz * 0.5, pick(PAL.phase), rnd(0.4, 0.7), 0.4, 0.05, 0, 1);
+      S.glow.emit(_v.x, _v.y, _v.z, vx * 0.12, rnd(0.3, 1), vz * 0.12, pick(PAL.phase), rnd(0.4, 0.7), 0.45, 0.05, 0, 1);
+    }
+    for (const c of race.cars) {   // slipping through a car: a pink ripple (+ 'すり抜け!' for the phantom's driver), once per car
+      if (c === car || c._?.left || away(c) || car.pos.distanceToSquared(c.pos) > PH.through * PH.through || (a.through ||= new Set()).has(c)) continue;
+      a.through.add(c);
+      const p = _w.set((car.pos.x + c.pos.x) / 2, (car.pos.y + c.pos.y) / 2 + 1, (car.pos.z + c.pos.z) / 2);
+      ring(S, p, COLOR.phase, { vertical: true, heading: car.heading, r0: 0.5, r1: 3.5, life: 0.4 });
+      burst(S.glow, p, 24, PAL.phase, 5, 0.45, 0.4, 0.05);
+      if (isHuman(car)) flash(race, who(race, car) + 'すり抜け!', COLOR.phase);
+    }
+  }
+  if (a.id === 'phase' && act === 'phase' && !phased(car)) {   // materialised: the dash
+    if (!a.solid) {
+      a.solid = true;
+      const p = _w.set(car.pos.x, car.pos.y + 0.8, car.pos.z);
+      glowBall(S, p, 3, 0.25, '#ffe0f0');
+      ring(S, p.setY(car.pos.y + 0.15), COLOR.phase, { r0: 1.5, r1: 9, life: 0.45 });
+      burst(S.glow, _w.set(car.pos.x, car.pos.y + 0.8, car.pos.z), 50, PAL.phase, 8, 0.5, 0.5, 0.05, 0, 2.5);
+      if (isHuman(car)) { flash(race, who(race, car) + '実体化ダッシュ!', COLOR.phase); race.hud?.shake?.(car, 0.25); }
+    }
+    for (const e of fx.exhaust) {   // pink / cyan jets
+      const p = world(e);
+      for (let n = Math.floor(90 * dt + Math.random()); n > 0; n--) {
+        const back = rnd(6, 12);
+        S.glow.emit(p.x + rnd(-0.1, 0.1), p.y + rnd(-0.1, 0.1), p.z + rnd(-0.1, 0.1), vx * 0.35 - sh * back + rnd(-1, 1), rnd(-0.5, 1.2), vz * 0.35 - ch * back + rnd(-1, 1),
+          pick(PAL.phase), rnd(0.18, 0.35), 0.7, 0.05, 0, 2);
+      }
     }
   }
 
@@ -760,6 +804,12 @@ function carVisuals(race, S, car, dt) {
     if (a.slow > 0 && Math.random() < dt * 14) {
       world(_w.set(fx.center.x + rnd(-1.5, 1.5), 0.3, fx.center.z + rnd(-2, 2)));
       S.glow.emit(_v.x, _v.y, _v.z, vx * 0.6, rnd(1, 2.5), vz * 0.6, pick(PAL.timeslow), rnd(0.6, 1), 0.45, 0.05, 0, 0.5);
+    }
+  }
+  if (act === 'timeslow') {   // out of step with time: violet afterimage motes hang in the air where it just was
+    for (let n = Math.floor(60 * dt + Math.random()); n > 0; n--) {
+      world(_w.set(fx.center.x + rnd(-0.5, 0.5) * fx.size.x, rnd(0.3, fx.box.max.y), fx.center.z + rnd(-0.5, 0.5) * fx.size.z));
+      S.glow.emit(_v.x, _v.y, _v.z, 0, rnd(0, 0.4), 0, pick(PAL.timeslow), rnd(0.5, 0.8), 0.55, 0.05, 0, 0.5);
     }
   }
 
@@ -778,7 +828,7 @@ function carVisuals(race, S, car, dt) {
     if (on && (fx.auraT -= dt) <= 0) {
       fx.auraT = 0.05;
       const b = fx.box, segs = [];
-      for (let i = 0; i < 7; i++) {
+      for (let i = 0; i < (a.charged ? 12 : 7); i++) {   // charged: a denser aura
         const p0 = new THREE.Vector3(rnd(b.min.x, b.max.x) * 1.1, rnd(b.min.y + 0.3, b.max.y + 0.2), rnd(b.min.z, b.max.z));
         jag(p0, p0.clone().add(_w.set(rnd(-1, 1), rnd(-0.3, 0.8), rnd(-1.5, 1.5))), 0.35, 3, 0.26, segs, false);
       }
@@ -786,7 +836,7 @@ function carVisuals(race, S, car, dt) {
       fx.aura.geometry = ribbons(segs);
       fx.aura.material.color.set(Math.random() < 0.5 ? '#fff3a0' : '#9fe4ff');
     }
-    if (on && Math.random() < dt * 40) {
+    if (on && Math.random() < dt * (a.charged ? 90 : 40)) {
       world(_w.set(rnd(fx.box.min.x, fx.box.max.x), rnd(0.3, fx.box.max.y + 0.3), rnd(fx.box.min.z, fx.box.max.z)));
       S.glow.emit(_v.x, _v.y, _v.z, vx + rnd(-2, 2), rnd(0, 2), vz + rnd(-2, 2), pick(PAL.thunderbolt), rnd(0.15, 0.3), 0.35, 0.05, 0, 3);
     }
@@ -847,7 +897,7 @@ function carVisuals(race, S, car, dt) {
     const ph = !act ? 0 : a.t < a.robotDur ? 1 : a.t < a.robotDur + ROBOT_T ? 2 : 3;   // car / robot / changing back / boost
     if (ph !== a.robotPh) {
       if (ph === 1 || ph === 2) transformFx(S, car, fx, ph === 1);
-      if (ph === 3 && isHuman(car)) flash(race, who(race, car) + '大加速!', COLOR.robotdash);
+      if (ph === 3 && isHuman(car)) { flash(race, who(race, car) + '大加速!', COLOR.robotdash); race.hud?.shake?.(car, 0.25); }
       a.robotPh = ph;
     }
     const k = ph === 1 ? Math.min(1, a.t / ROBOT_T) : ph === 2 ? 1 - (a.t - a.robotDur) / ROBOT_T : 0;   // 0 car .. 1 robot
@@ -922,9 +972,14 @@ function applyOwn(race, car, a, dt) {
   // dock behind the target instead of ramming it at +45%: no pull while closing in faster than it could brake off by then
   if (tg && car.speed > Math.max(0, tg.speed || 0) + Math.sqrt(2 * MAGNET_DOCK * (gap - MAGNET_CATCH))) return;
   if (a.id === 'boost' || a.id === 'nitro' || a.id === 'magnet' || a.id === 'hellchain') { m.speedMul += a.power; m.accelMul += a.power; }
+  else if (a.id === 'warp') { const b = WARP.boost * Math.min(1, a.power); m.speedMul += b; m.accelMul += b; }   // the exit boost (node a3 doesn't raise it)
   else if (a.id === 'shield') m.invulnerable = true;
-  else if (a.id === 'phase') { m.noCollide = true; m.noOffroadPenalty = true; m.speedMul += a.power; }
-  else if (a.id === 'thunderbolt') { m.speedMul += THUNDER_BOOST; m.accelMul += THUNDER_BOOST; }   // a.power = victim's spin
+  else if (a.id === 'phase' && phased(car)) {   // the ghost (PH)
+    m.noCollide = true; m.noOffroadPenalty = true;
+    m.speedMul += PH.top; m.accelMul += PH.acc; m.gripMul += PH.grip;
+  }
+  else if (a.id === 'phase') { m.speedMul += a.power; m.accelMul += a.power; m.gripMul += PH.grip * gripOut(a.t - a.phaseDur); }   // materialised: the dash (a.power)
+  else if (a.id === 'thunderbolt') { const b = a.charged ? THUNDER.charge : THUNDER.boost; m.speedMul += b; m.accelMul += b; }   // a.power = victim's spin
   else if (a.id === 'domain') { m.speedMul += DOMAIN_BOOST; m.accelMul += DOMAIN_BOOST; }        // a.power = slow inside the dome
   else if (a.id === 'downforce') { m.downforce = a.power; m.invulnerable = true; slingshot(race, car, a, m, dt); }
   else if (a.id === 'tokyodive' && a.away) { m.noCollide = true; m.noOffroadPenalty = true; }
@@ -933,15 +988,20 @@ function applyOwn(race, car, a, dt) {
     m.speedMul += b; m.accelMul += b;
     if (diveGuard(car)) m.invulnerable = true;
   }
+  else if (a.id === 'timeslow') {   // out of step with time (TSLOW): through cars, a little faster
+    const b = TSLOW.boost * (1 + (a.power / ABILITIES.timeslow.power - 1) / 2);   // node a3: half its +25 %
+    m.noCollide = true; m.speedMul += b; m.accelMul += b;
+  }
   else if (a.id === 'reflect') m.reflect = true;   // game.js collide(): keeps its speed, the rammer bounces off
+  else if (a.id === 'facewall' && a.t < FACE.drop) { m.speedMul += FACE.top; m.accelMul += FACE.acc; }   // dashes off while its row drops back
   else if (a.id === 'family') {   // tucked in behind the lead ally (famStep: famK), then the parting boost
     const b = a.t >= a.famDur ? FAM.partPow : 0;   // (the draft fades out meanwhile: whichever is more, not both)
     m.speedMul += Math.max(FAM.top * a.power * a.famK, b); m.accelMul += Math.max(FAM.acc * a.power * a.famK, b);
     m.gripMul += FAM.grip * a.famK;   // on the lead's line
   }
   else if (a.id === 'robotdash') {
-    if (isRobot(car)) m.invulnerable = true;
-    else { m.speedMul += a.power; m.accelMul += a.power; }   // changed back: the dash
+    if (isRobot(car)) { m.invulnerable = true; m.speedMul += ROBOT.run * a.power; m.accelMul += ROBOT.acc * a.power; m.gripMul += ROBOT.grip * a.power; }
+    else { m.speedMul += ROBOT.dashTop * a.power; m.accelMul += ROBOT.dashAcc * a.power; m.gripMul += ROBOT.grip * a.power * gripOut(a.t - a.robotDur - ROBOT_T); }   // changed back: the dash
   }
 }
 
@@ -978,6 +1038,7 @@ function wakeOf(race, c) {
 function endFx(S, car) {
   const a = car.ability, p = _w.set(car.pos.x, car.pos.y + 0.8, car.pos.z);
   if (a.id === 'shield') burst(S.glow, p, 40, PAL.shield, 8, 0.5, 0.45, 0.05);
+  else if (a.id === 'timeslow') burst(S.glow, p, 36, PAL.timeslow, 7, 0.5, 0.45, 0.05);
   else if (a.id === 'phase') { setPhase(car, false); burst(S.glow, p, 30, PAL.phase, 5, 0.6, 0.4, 0.05); }
   else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash', 'hellchain'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
   else if (['thunderbolt', 'magnet', 'domain', 'downforce', 'robotdash', 'tokyodive', 'reflect', 'family'].includes(a.id)) burst(S.glow, p, 30, PAL[a.id], 6, 0.5, 0.4, 0.05);
@@ -1008,6 +1069,17 @@ function warpDest(race, pose, dist) {
   return { pos, heading: pose.h + wrap(Math.atan2(tan.x, tan.z) - pose.h), i };   // keep heading continuous
 }
 
+// warp: the jump is WARP.sec s of the car's own driving from where it is (roadAhead, its speed at each sample last time
+// round: a.lapV as tokyodive's), so it is worth about the same seconds on a fast course as on a twisty one; landing as
+// ever (lateral offset kept inside the road, heading along it, speed kept). Then the exit boost: speed / accel + boost
+// (x power, at most 1: node a3 doesn't raise it) for the ability's duration. Only the owner's client measures the jump;
+// the message carries it (wd) for the others' fx
+const WARP = { sec: 2, boost: 0.2 };
+export const __warp = WARP;   // balance harness only (tools)
+const warpJump = (race, car) => Math.min(roadAhead(race.track, car, car.trackIndex, WARP.sec), (race.track?.length || 1e4) / 2);
+const WARP_SCREEN = ['radial-gradient(ellipse at center, rgba(255,255,255,0.85), rgba(120,230,255,0.55) 35%, rgba(58,107,255,0.45) 70%, rgba(5,10,40,0.8) 100%)',
+  [{ opacity: 0.9 }, { opacity: 0 }], 380];
+
 function warpFx(S, from, to, h0, h1) {
   for (const [p, h, big] of [[from, h0, false], [to, h1, true]]) {
     const c = _w.copy(p); c.y += 0.9;
@@ -1017,8 +1089,8 @@ function warpFx(S, from, to, h0, h1) {
     c.y -= 0.8;
     ring(S, c, '#bff4ff', { r0: 1, r1: big ? 10 : 7, life: 0.6, opacity: 0.7 });
   }
-  for (let i = 0; i < 40; i++) {   // streak along the jump
-    _v.lerpVectors(from, to, i / 40);
+  for (let i = 0, n = Math.min(160, 30 + Math.round(from.distanceTo(to) * 0.6)); i < n; i++) {   // streak along the jump
+    _v.lerpVectors(from, to, i / n);
     S.glow.emit(_v.x + rnd(-0.6, 0.6), _v.y + rnd(0.3, 1.5), _v.z + rnd(-0.6, 0.6), rnd(-1, 1), rnd(0, 1), rnd(-1, 1), pick(PAL.warp), rnd(0.3, 0.7), 0.55, 0.02, 0, 1);
   }
 }
@@ -1109,6 +1181,42 @@ function oilHit(race, S, car, power) {
   burst(S.smoke, p, 30, PAL.oil, 6, 0.8, 0.35, 0.15, 12, 1, 0.9, 3);
   burst(S.glow, p.setY(p.y + 0.8), 14, PAL.spark, 4, 0.6, 0.35, 0.05, -1);
   if (isHuman(car)) flash(race, who(race, car) + 'スピン!', '#ffd23f');
+}
+
+// ---------- timeslow ----------
+// クロノ・ドラゴン: for the ability's base duration every other car is held to (1 − power) of its own recent pace (a.pace: a
+// TSLOW.tau s average of its speed, at least TSLOW.floor × its top), so the slow bites as hard on a twisty course as on a
+// fast one (a cap at (1 − power) × top did little where the corners are slower than that anyway). Meanwhile the owner is out
+// of step with them: for its whole active time (× node a2; its gauge waits meanwhile, like any other ability) it drives
+// through cars (noCollide) at + boost speed / accel (node a3: half its +25 %). The slow itself stays at its base numbers
+// whatever the nodes (every node ≈ +45 % per minute, not +80 %; CONTRACT.md). Each client slows its own cars (a hazard, as
+// before: shields ignore it, mirrors bounce it); the owner's active state comes with the same message.
+const TSLOW = { boost: 0.1, floor: 0.5, tau: 3 };
+const TIME_SCREEN = ['radial-gradient(ellipse at center, rgba(240,220,255,0) 30%, rgba(170,110,255,0.4) 70%, rgba(90,40,200,0.7) 100%)',
+  [{ opacity: 0 }, { opacity: 1, offset: 0.15 }, { opacity: 0.4, offset: 0.5 }, { opacity: 0 }], 800];
+// a CPU owner drives through the cars in its lane as a player would: its driver (game.js aiInput) queues behind any car
+// ahead, so while it still has braking room for the corners (car._.room) it keeps the throttle down (a drift keeps its inputs)
+function tsThrough(race, car) {
+  const c = car._, inp = car.input;
+  if (car.control !== 'cpu' || !inp || !(c?.room > 0) || c.aiDrift || car.spin > 0) return;
+  const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
+  for (const o of race.cars) {
+    if (o === car || o._?.left || away(o)) continue;
+    const dx = o.pos.x - car.pos.x, dz = o.pos.z - car.pos.z, along = dx * fx + dz * fz;
+    if (along > 1 && along < 30 && Math.abs(dz * fx - dx * fz) < 3) { inp.throttle = 1; inp.brake = 0; return; }
+  }
+}
+// the owner goes through a slowed car: a violet flicker where they overlap, once per car and use ('すり抜け!' for a player)
+function tsPass(race, S, car) {
+  const a = car.ability;
+  for (const o of race.cars) {
+    if (o === car || !(o.ability?.slow > 0) || a.tsPassed?.has(o) || (o.pos.x - car.pos.x) ** 2 + (o.pos.z - car.pos.z) ** 2 > 9) continue;
+    (a.tsPassed ||= new Set()).add(o);
+    const p = _w.set((o.pos.x + car.pos.x) / 2, (o.pos.y + car.pos.y) / 2 + 1, (o.pos.z + car.pos.z) / 2);
+    ring(S, p, COLOR.timeslow, { vertical: true, heading: car.heading, r0: 0.5, r1: 4, life: 0.4 });
+    burst(S.glow, p, 30, PAL.timeslow, 6, 0.5, 0.45, 0.05, 0, 2);
+    if (isHuman(car)) flash(race, who(race, car) + 'すり抜け!', COLOR.timeslow);
+  }
 }
 
 function slowedHumans(race) {
@@ -1210,7 +1318,9 @@ function screenFlash(race, car, [bg, frames, ms] = THUNDER_SCREEN) {
 
 // bolt from the sky onto the target (follows it for its 0.4 s), spark burst; spin unless shielded or reflecting (src = the
 // caster, may be null). A 'net' target's spin only turns its mesh here: its own client applies the real one (or reflects).
+// A bolt that lands (no guard, no mirror) charges the caster (thunderCharge).
 function strike(race, S, target, pow, src = null) {
+  if (src?.ability) src.ability.charged = false;
   if (!target?.pos || away(target)) return;
   const bolt = new THREE.Mesh(ribbons(jag(new THREE.Vector3(rnd(-8, 8), 75, rnd(-8, 8)), new THREE.Vector3(0, 0.9, 0), 9, 6, 2.4, [], true)), boltMat(S, '#ffffff'));
   bolt.userData.ownGeo = true;
@@ -1231,9 +1341,31 @@ function strike(race, S, target, pow, src = null) {
     guardFlash(race, target);
     return;
   }
+  if (src?.ability) thunderCharge(race, S, src, target);   // before the victim's '落雷!': in split screen that flash stays
   target.spin = Math.max(target.spin || 0, pow);
   burst(S.smoke, p, 14, PAL.smoke, 3, 0.9, 0.5, 1.6, -0.5, 1.5, 0.3);
   if (isHuman(target)) { flash(race, who(race, target) + '⚡ 落雷!', '#8fd8ff'); screenFlash(race, target); }
+}
+
+// the bolt landed: its energy arcs from the victim back to the caster (following both for 0.4 s), whose boost is
+// THUNDER.charge instead of .boost for the rest of its active time (applyOwn; the aura thickens). Each client decides it
+// from its own view, like the strike; the caster's own client drives the caster, so its view is the one that counts.
+function thunderCharge(race, S, src, target) {
+  src.ability.charged = true;
+  if (!src.pos) return;
+  const e0 = new THREE.Vector3(), e1 = new THREE.Vector3(), segs = () => {
+    e0.set(target.pos.x, target.pos.y + 0.9, target.pos.z);
+    e1.set(src.pos.x, src.pos.y + 1, src.pos.z);
+    return jag(e0, e1, e0.distanceTo(e1) * 0.06, 5, 0.6, [], false);
+  };
+  const arc = new THREE.Mesh(ribbons(segs()), boltMat(S, '#fff27a'));
+  arc.userData.ownGeo = true;
+  arc.frustumCulled = false;
+  arc.renderOrder = 22;
+  addFx(S, arc, 0.4, (o, k) => { ribbons(segs(), o.geometry); o.material.opacity = 1 - k * 0.7; });
+  glowBall(S, e1, 2.2, 0.3, '#fff27a');
+  burst(S.glow, e1, 40, PAL.thunderbolt, 8, 0.45, 0.5, 0.05, 0, 2);
+  if (isHuman(src)) flash(race, who(race, src) + '⚡ チャージ!', COLOR.thunderbolt);
 }
 
 // ---------- domain ----------
@@ -1267,7 +1399,7 @@ function spawnDomain(race, S, owner, at, dur, pow) {
   const tr = race.track, tan = new THREE.Vector3(), left = new THREE.Vector3(), up = new THREE.Vector3(), basis = new THREE.Matrix4();
   let hint;
   race.hazards.push({
-    kind: 'domain', owner, power: pow, center, life: dur, age: 0, on: true,
+    kind: 'domain', owner, power: pow, center, life: dur, age: 0, on: true, held: 0,
     update(dt) {
       this.age += dt;
       if (owner?._?.left) this.life = Math.min(this.life, this.age);   // owner quit (online)
@@ -1294,11 +1426,21 @@ function spawnDomain(race, S, owner, at, dur, pow) {
       runes[0].material.opacity = o * (0.75 + 0.25 * Math.sin(S.time * 3));
       runes[1].material.opacity = o * 0.8;
       if (this.on) {
-        for (let n = Math.floor(90 * dt + Math.random()); n > 0; n--) {   // motes drifting up inside the dome
+        for (let n = Math.floor(160 * dt + Math.random()); n > 0; n--) {   // motes drifting up inside the dome
           const r = Math.sqrt(Math.random()) * DOMAIN_R * k * 0.95, th = rnd(0, Math.PI * 2);
           const p = _w.set(Math.cos(th) * r, rnd(0, 2), Math.sin(th) * r).applyQuaternion(g.quaternion).add(center);
           S.glow.emit(p.x, p.y, p.z, rnd(-0.3, 0.3), rnd(2, 4), rnd(-0.3, 0.3), pick(PAL.domain), rnd(1.8, 2.8), 1.1, 0.3, -0.6, 0.2, 0.9);
         }
+        // who it holds, as this client shows them (cosmetic): the owner's '封印' count, motes on remote cars (each client
+        // slows / seals its own cars and gives them their motes in updateAbilities)
+        let n = 0;
+        for (const c of race.cars) {
+          if (c === owner || c.finished || c._?.left || away(c) || c.mods?.invulnerable || mirrorOn(c) || this.bounced?.has(c) || c.pos.distanceToSquared(center) >= DOMAIN_R * DOMAIN_R) continue;
+          n++;
+          if (c.control === 'net' && Math.random() < dt * 14) S.glow.emit(c.pos.x + rnd(-1, 1), c.pos.y + rnd(0.5, 1.5), c.pos.z + rnd(-1, 1), c.vel?.x || 0, rnd(1.5, 3), c.vel?.z || 0, pick(PAL.domain), rnd(0.6, 1), 0.5, 0.1, 0, 0.5);
+        }
+        if (n > this.held && owner && isHuman(owner)) flash(race, who(race, owner) + `${n}台 封印!`, COLOR.domain);
+        this.held = Math.max(this.held, n);
       }
       return true;
     },
@@ -1397,7 +1539,7 @@ function chainTow(race, car, a) {
   if (tg.control === 'net' && mirrorOn(tg)) return;
   const gap = magnetGap(race, car, tg), proof = chainProof(tg);
   // (owner quit online: its car is frozen where it left and no 'rel' will come)
-  if (a.t >= a.chainDur || car.finished || car._?.left || tg.finished || tg._?.left || proof || gap < 0 || gap > HELL.range * 1.5 || car.pos.distanceTo(tg.pos) <= HELL.snap) {
+  if (a.t >= a.chainDur || car.finished || car._?.left || tg.finished || tg._?.left || proof || gap < 0 || gap > HELL.range * 1.5 || gap <= HELL.let || car.pos.distanceTo(tg.pos) <= HELL.snap) {
     chainRelease(race, car, a, !proof);
     return;
   }
@@ -1433,15 +1575,27 @@ function chainRelease(race, car, a, sling, bounced = false) {
     if (tg.ability) tg.ability.hit = 1;
     guardFlash(race, tg);
   }
-  // the snap whips the target round: a spin on the target's own client (every client runs the release; remote cars skip)
+  // the snap whips the target round: a spin on the target's own client (every client runs the release; remote cars skip),
+  // swinging it aside off the owner's line (or toward the middle of the road when right in line), so the slingshot passes it
   if (tg && sling && tg.control !== 'net' && !tg.finished && !chainProof(tg) && !mirrorOn(tg)) {
     tg.spin = Math.max(tg.spin || 0, HELL_SLING.whip);
+    const s = race.track?.samples?.[tg.trackIndex];
+    if (s && tg.vel) {
+      const lat = c => (c.pos.x - s.pos.x) * s.right.x + (c.pos.z - s.pos.z) * s.right.z, d = lat(tg) - lat(car);
+      const side = Math.abs(d) > 0.5 ? Math.sign(d) : -Math.sign(lat(tg)) || 1;
+      tg.vel.x += s.right.x * side * HELL_SLING.fling; tg.vel.z += s.right.z * side * HELL_SLING.fling;
+    }
     if (isHuman(tg)) flash(race, who(race, tg) + '鎖で振り回された!', COLOR.hellchain);
   }
   a.chained = false; a.target = null; a.t = 0;
   a.active = a.activeMax = bounced ? 0 : b.dur;
   a.power = b.pow;
-  if (sling && isHuman(car)) flash(race, who(race, car) + 'スリングショット!', COLOR.hellchain);
+  if (sling && car.pos) {   // the slingshot: a burst of fire off the owner's tail
+    const k = halfLen(car), p = _w.set(car.pos.x - Math.sin(car.heading) * k, car.pos.y + 0.6, car.pos.z - Math.cos(car.heading) * k);
+    burst(S.glow, p, 40, PAL.hellchain, 9, 0.45, 0.5, 0.05, 0, 2);
+    ring(S, p, COLOR.hellchain, { vertical: true, heading: car.heading, r0: 0.5, r1: 4.5, life: 0.4 });
+    if (isHuman(car)) { flash(race, who(race, car) + 'スリングショット!', COLOR.hellchain); race.hud?.shake?.(car, 0.3); }
+  }
   if (race.net && car.control === 'p1') race.net.send({ t: 'ability', pid: race.localPid, id: 'hellchain', rel: 1, ...(bounced && { b: 1 }) });   // b: reflected, no slingshot / whip anywhere
 }
 
@@ -1525,10 +1679,16 @@ function bounce(race, S, tg, src, id, e, at = null, from = tg?.pos) {
 }
 
 // ---------- facewall ----------
-// Copies of the owner's own mesh (shared geometry / materials) in a line across the road at the owner's spot on the track:
-// a pair every FACE.every s, FACE.gap m apart, out to the barriers, spinning and hopping. They ride along with the owner
-// (a remote owner's predicted car). The block itself is faceWall(), run by game.js; each client blocks only its own cars.
-const FACE = { gap: 4.5, every: 0.35, pop: 0.35, out: 0.5, half: 2.3, spin: 11, min: 4.4, push: 0.35, slower: 2, bounce: 3, again: 0.6 };
+// Copies of the owner's own mesh (shared geometry / materials) in a line across the road, centred where the owner raised
+// it: one there, then a pair every FACE.every s, FACE.gap m apart, out to the barriers, spinning and hopping. The row
+// rolls along behind the owner (a remote owner's predicted car): for its first FACE.drop s at FACE.row x the owner's
+// speed, so it drops back (hz.lag m) into the cars behind, then at the owner's speed (a node a2 wall holds longer, it
+// doesn't drop further). The block itself is faceWall(), run by game.js; each client blocks only its own cars.
+// While the row drops back the owner dashes off: speed / accel + FACE.top / acc (applyOwn, not x power or node a2). A car
+// hitting the faces is knocked back (along-track speed − FACE.bounce) and slowed FACE.slow x power for FACE.slowT s (its
+// own client). Per use ~+1.95 s net at stock, ~+2.1 s with every node (oni AI; CONTRACT.md).
+const FACE = { gap: 4.5, every: 0.35, pop: 0.35, out: 0.5, half: 2.3, spin: 11, min: 4.4, push: 0.35, slower: 2, bounce: 6, again: 0.6,
+  row: 0.5, drop: 3, top: 0.2, acc: 0.5, slow: 0.3, slowT: 1.2 };
 COLOR.facewall = '#ffb37a';
 PAL.facewall = pal('#fff4e8', '#ffd2ad', '#ffb37a', '#ff8a5c');
 
@@ -1558,45 +1718,51 @@ function faceFwd(tr, n) {
   const t = tr.tangentAt(n.t), l = Math.hypot(t.x, t.z) || 1;
   return [t.x / l, t.z / l];
 }
+// the row's centre: hz.lag m back along the track from the owner (n = its nearest), on the lateral it was raised at
+function faceRow(tr, hz, n) {
+  const t = ((n.t - hz.lag / tr.length) % 1 + 1) % 1, p = tr.pointAt(t), [fx, fz] = faceFwd(tr, { t });
+  return { t, fx, fz, x: p.x - fz * hz.lat, y: p.y, z: p.z + fx * hz.lat, curv: tr.samples[Math.round(t * tr.N) % tr.N].curv };
+}
 
-function spawnFaceWall(race, S, owner, dur) {
+function spawnFaceWall(race, S, owner, dur, pow) {
   const tr = race.track;
   if (!owner.mesh || !tr?.nearest) return;
   const proto = new THREE.Group();
   for (const c of owner.mesh.children) if (!c.userData.abilFx && !c.isLight) proto.add(c.clone());   // not its fx / headlight
   const wall = tr.wall ?? tr.width / 2 + 9.4, lim = wall - FACE.half, pairs = Math.ceil(2 * wall / FACE.gap), faces = [];
   let hint = owner.trackIndex;
+  const add = (k, born) => { const o = proto.clone(); S.root.add(o); faces.push({ o, k, born, ph: rnd(0, Math.PI * 2), vis: null, puff: false }); };
+  add(0, 0);   // where the owner raised it
   race.hazards.push({
-    kind: 'facewall', owner, on: true, age: 0, life: dur, pairs: 0, lim,
+    kind: 'facewall', owner, power: pow, on: true, age: 0, life: dur, pairs: 0, lim, lag: 0,
+    lat: clamp(tr.nearest(owner.pos, hint).lateral, -lim, lim),
     update(dt) {
       this.age += dt;
       if (owner._?.left) this.life = Math.min(this.life, this.age);   // owner quit (online)
       const was = this.on;
       this.on = this.age < this.life;
-      while (this.on && faces.length < pairs * 2 && this.age >= faces.length / 2 * FACE.every) {
-        const k = faces.length / 2 + 1;
-        for (const sg of [1, -1]) {
-          const o = proto.clone();
-          S.root.add(o);
-          faces.push({ o, k: sg * k, born: this.age, ph: rnd(0, Math.PI * 2), vis: null, puff: false });
-        }
+      while (this.on && faces.length < pairs * 2 + 1 && this.age >= (faces.length - 1) / 2 * FACE.every) {
+        const k = (faces.length - 1) / 2 + 1;
+        add(k, this.age); add(-k, this.age);
       }
-      this.pairs = faces.length / 2;
+      this.pairs = (faces.length - 1) / 2;
+      this.k = this.age < FACE.drop ? FACE.row : 1;   // the row's speed / the owner's
+      if (this.on) this.lag += (1 - this.k) * Math.max(0, owner.speed || 0) * dt;
       // placed where the owner will be after this frame's physics / net prediction (they run after the hazards), so the
-      // row lines up with the drawn car and with faceWall()'s hold instead of trailing it by speed × dt
+      // row lines up with faceWall()'s hold instead of trailing it by speed × dt
       const stale = faceStale(owner), at = stale ? owner.pos : _v.copy(owner.pos).addScaledVector(owner.vel, dt);
-      const n = tr.nearest(at, hint), [fx, fz] = faceFwd(tr, n), h0 = Math.atan2(fx, fz), ax = at.x, az = at.z;
+      const n = tr.nearest(at, hint), r = faceRow(tr, this, n), h0 = Math.atan2(r.fx, r.fz);
       hint = n.index;
       const end = this.on ? 0 : (this.age - this.life) / FACE.out;
       if (end >= 1) return false;
       for (const f of faces) {
-        const t = this.age - f.born, lat = faceLat(n.lateral, f.k, lim), inside = lat != null && !stale;
+        const t = this.age - f.born, lat = faceLat(this.lat, f.k, lim), inside = lat != null && !stale;
         f.vis = f.vis == null ? +inside : f.vis + (+inside - f.vis) * Math.min(1, dt * 8);
         const sc = (t < FACE.pop ? easeOutBack(t / FACE.pop) : 1) * f.vis * (1 - end * end);
         f.o.visible = sc > 0.01;
         if (!f.o.visible) continue;
         f.o.scale.setScalar(sc);
-        if (lat != null) f.o.position.set(ax - fz * (lat - n.lateral), n.point.y + 0.3 * Math.abs(Math.sin(t * 7 + f.ph)), az + fx * (lat - n.lateral));
+        if (lat != null) f.o.position.set(r.x - r.fz * (lat - this.lat), r.y + 0.3 * Math.abs(Math.sin(t * 7 + f.ph)), r.z + r.fx * (lat - this.lat));
         f.o.rotation.set(0, h0 + f.ph + t * FACE.spin + end * end * 25, Math.sin(t * 9 + f.ph) * 0.12);
         if ((!f.puff && inside) || (was && !this.on)) { f.puff = true; facePuff(S, f.o.position); }
       }
@@ -1606,7 +1772,7 @@ function spawnFaceWall(race, S, owner, dur) {
   });
 }
 
-// CPU: raise the wall when a car is close behind (no use otherwise)
+// CPU ('smart'): raise the wall when a car is close behind
 function faceWanted(race, car) {
   return race.cars.some(c => {
     const gap = (car.progress - c.progress) * (race.track?.length || 0);
@@ -1655,7 +1821,10 @@ export function cpuAbility(race, car, road) {
       // (a hellchain at a family owner: its rear ally would cut the chain)
       return g >= (id === 'magnet' ? 30 : 20) && g <= 150 && (id === 'magnet' && planted(t) || !chainProof(t) && !famWall(t)) && !mirrorOn(t) && (id === 'magnet' || road.straight > 60) && `target ${Math.round(g)}m`;
     }
-    case 'domain': { const n = near(35).filter(c => !c.mods?.invulnerable && !mirrorOn(c)).length; return n > 0 && !near(DOMAIN_R).some(mirrorOn) && `${n} in range`; }
+    case 'domain': {   // rivals it can seal: beside / behind it, or ahead with a straight to get past them on (DOMAIN_PASS)
+      const n = near(35).filter(c => !c.mods?.invulnerable && !mirrorOn(c) && (gap(c) < 5 || road.straight > DOMAIN_PASS)).length;
+      return n > 0 && !near(DOMAIN_R).some(mirrorOn) && `${n} in range`;
+    }
     case 'oil': {   // a car 5-30 m behind, about in line (the slick lands 4 m behind, 3 m wide)
       const s = race.track.samples[car.trackIndex];
       return rivals.some(c => -gap(c) > 5 && -gap(c) < 30 && !mirrorOn(c) && Math.abs((c.pos.x - car.pos.x) * s.right.x + (c.pos.z - car.pos.z) * s.right.z) < 3.5) && 'behind';
@@ -1675,10 +1844,10 @@ export function cpuAbility(race, car, road) {
     case 'timeslow': return rivals.some(c => gap(c) > 0 && gap(c) < 60) && !rivals.some(mirrorOn) && 'ahead';
     case 'phase': return (road.straight > 120 || rivals.some(c => gap(c) > 0 && gap(c) < 20)) && 'through';
     case 'robotdash': return near(10).length > 0 && 'close';
-    case 'facewall': return faceWanted(race, car) && 'behind';
-    // lands pow m on at the same speed: only with 45 m of straight and of braking room left after the jump (less landed it
+    case 'facewall': return faceWanted(race, car) && 'behind';   // (nobody: game.js takes a straight after lv.hold s, the dash)
+    // lands its jump (warpJump) on at the same speed: only with 45 m of straight and of braking room left after it (less landed it
     // in a braking zone too fast, or off the line at the turn-in)
-    case 'warp': return Math.min(road.straight, road.room) > ABILITIES.warp.power * (car.stats?.abilityPower || 1) + 45 && 'straight';
+    case 'warp': return Math.min(road.straight, road.room) > warpJump(race, car) + 45 && 'straight';
     // a long straight to draft down (road.straight tops out at 250), or a chaser up to 40 m back, behind where the rear
     // ally lands (famStep rAlong, + 3 m: it blocks only cars behind its centre)
     case 'family': {
@@ -1690,39 +1859,47 @@ export function cpuAbility(race, car, road) {
 }
 
 // game.js, after car-car collisions (every physics substep): this client's own cars just behind a live wall and inside
-// the shown faces' edges are held FACE.min m behind the row, no faster than the row − FACE.slower, with a bounce on
-// contact. Cars ahead of the owner and shielded / phased / robot cars are free; a warp jumps past.
+// the shown faces' edges are held FACE.min m behind the row, no faster than the row − FACE.slower; on contact knocked
+// back and slowed. Cars ahead of the row and shielded / phased / robot cars are free; a warp jumps past.
 export function faceWall(race) {
   const tr = race.track;
   for (const hz of race.hazards || []) {
     if (hz.kind !== 'facewall' || !hz.on || !tr?.nearest || faceStale(hz.owner)) continue;
-    const o = hz.owner, on = tr.nearest(o.pos, o.trackIndex), [fx, fz] = faceFwd(tr, on), curv = tr.samples[on.index].curv;
-    const lo = faceEdge(on.lateral, hz.pairs, hz.lim, -1), hi = faceEdge(on.lateral, hz.pairs, hz.lim, 1);
+    const o = hz.owner, r = faceRow(tr, hz, tr.nearest(o.pos, o.trackIndex)), fx = r.fx, fz = r.fz;
+    const lo = faceEdge(hz.lat, hz.pairs, hz.lim, -1), hi = faceEdge(hz.lat, hz.pairs, hz.lim, 1);
     for (const c of race.cars) {
       // (a planted downforce car is invulnerable too, but no car drives through the wall: it is held like any other)
-      if (c === o || c.control === 'net' || c.finished || c._?.left || (c.mods?.invulnerable && !planted(c)) || c.mods?.noCollide) continue;
+      if (c === o || c.control === 'net' || c.finished || c._?.left || (c.mods?.invulnerable && !planted(c)) || phased(c) || away(c)) continue;
       const n = tr.nearest(c.pos, c.trackIndex), min = FACE.min + halfLen(c) - 2.1;   // a longer car: held by its own nose
       if (n.lateral < lo || n.lateral > hi) continue;
-      // the faces stand on a straight line across the road through the owner: measure (and push) square to that line,
-      // not along the centreline, which in a corner is far shorter on the inside than on the outside
-      const behind = (((on.t - n.t) % 1 + 1.5) % 1 - 0.5) * tr.length;   // m behind the owner along the track
-      const gap = (o.pos.x - c.pos.x) * fx + (o.pos.z - c.pos.z) * fz;
+      // the faces stand on a straight line across the road: measure (and push) square to that line, not along the
+      // centreline, which in a corner is far shorter on the inside than on the outside
+      const behind = (((r.t - n.t) % 1 + 1.5) % 1 - 0.5) * tr.length;   // m behind the row along the track
+      const gap = (r.x - c.pos.x) * fx + (r.z - c.pos.z) * fz;
       if (behind < 0 || behind > 15 || gap < 0 || gap >= min) continue;
       if (hz.bounced?.has(c)) continue;   // reflected once: this wall leaves it alone from then on
       if (mirrorOn(c)) { (hz.bounced ||= new Set()).add(c); reflects(race, c, o, 'facewall'); continue; }   // drives through; the owner is held back
       const push = Math.min(min - gap, FACE.push);
       c.pos.x -= fx * push; c.pos.z -= fz * push;
-      // the row turns with the owner: at the car's offset from it, it moves at speed × (1 + curv × offset)
-      const cap = Math.max(0, (o.speed || 0) * Math.max(0.3, 1 + curv * (n.lateral - on.lateral)) - FACE.slower);
+      // the row rolls at hz.k × the owner's speed, turning through corners: at the car's offset from its centre it
+      // moves at that × (1 + curv × offset)
+      const cap = Math.max(0, (hz.k ?? 1) * (o.speed || 0) * Math.max(0.3, 1 + r.curv * (n.lateral - hz.lat)) - FACE.slower);
       const vt = c.vel.x * fx + c.vel.z * fz;
       if (vt <= cap) continue;
       const S = st(race), a = c.ability || initAbility(race, c), hit = S.time - (a.faceAt ?? -9) > FACE.again;
       const dv = vt - cap + (hit ? FACE.bounce : 0);
       c.vel.x -= fx * dv; c.vel.z -= fz * dv;
       if (!hit) continue;
-      if (isHuman(c) && S.time - (a.faceAt ?? -9) > 1.5) flash(race, who(race, c) + '顔にブロックされた!', COLOR.facewall);
+      if (isHuman(c)) {
+        if (S.time - (a.faceAt ?? -9) > 1.5) flash(race, who(race, c) + '顔にはじかれた!', COLOR.facewall);
+        race.hud?.shake?.(c, 0.35);
+      }
       a.faceAt = S.time;
-      burst(S.glow, _w.set(c.pos.x + fx * 2, c.pos.y + 1, c.pos.z + fz * 2), 18, PAL.facewall, 6, 0.35, 0.4, 0.05);
+      if (!planted(c)) {   // knocked back: slowed like a reflected slow (planted: held, never slowed)
+        a.bounceP = Math.max(a.bounceT > 0 ? a.bounceP : 0, Math.min(0.6, FACE.slow * (hz.power ?? 1)));
+        a.bounceT = Math.max(a.bounceT || 0, FACE.slowT);
+      }
+      burst(S.glow, _w.set(c.pos.x + fx * 2, c.pos.y + 1, c.pos.z + fz * 2), 30, PAL.facewall, 9, 0.4, 0.5, 0.05);
     }
   }
 }
@@ -1734,21 +1911,42 @@ function start(race, car, id, dur, pow, pose, target = null) {
   if (id === 'tokyodive') { diveStart(race, S, car, dur, pow, pose); return; }
   if (id === 'family') { famStart(race, S, car, dur, pow, pose); return; }
   if (id === 'warp') {
-    const d = warpDest(race, pose, pow);
+    const d = warpDest(race, pose, pose.jump || 0), tr = race.track;
+    // a difficulty CPU lands on its racing line, heading along it (as diveOut): at its old offset it landed off the line
+    // in a bend its line takes flat out, and ran wide into the wall
+    const line = car?.control === 'cpu' && d.i != null && tr.line, s = line && tr.samples[d.i];
+    if (s) {
+      d.pos.addScaledVector(s.right, line.off[d.i] - _v.copy(d.pos).sub(s.pos).dot(s.right));
+      d.heading += wrap(line.head[d.i] - d.heading);
+    }
     if (car && car.control !== 'net') {   // remote cars arrive via net state
+      if (d.i != null && tr?.samples) car.speed = landSpeed(tr, car, d.i, car.speed);   // as diveOut: not into a bend at straight-line speed
       car.pos.copy(d.pos);
       car.heading = d.heading;
       car.vel?.set(Math.sin(d.heading), 0, Math.cos(d.heading)).multiplyScalar(car.speed);
       if (car.mesh) { car.mesh.position.copy(d.pos); car.mesh.rotation.y = d.heading; }
+      if (d.i != null) car.trackIndex = tr.nearest(d.pos, d.i).index;   // past nearest()'s search window from the old one
     }
     warpFx(S, at, d.pos, pose.h, d.heading);
+    if (!car) return;
+    const a = car.ability;   // the exit boost (applyOwn; every client shows its flames)
+    a.active = a.activeMax = dur;
+    a.power = pow;
+    a.t = 0;
+    if (isHuman(car)) {
+      screenFlash(race, car, WARP_SCREEN);
+      flash(race, `${who(race, car)}ワープ +${Math.round(pose.jump || 0)}m!`, COLOR.warp);
+    }
     return;
   }
   if (id === 'domain') spawnDomain(race, S, car, at, dur, pow);
-  if (id === 'facewall' && car) spawnFaceWall(race, S, car, dur);
+  if (id === 'facewall' && car) spawnFaceWall(race, S, car, dur, pow);
   if (id === 'oil') spawnOil(race, S, pose, dur, pow, car);
   else if (id === 'timeslow') {
-    race.hazards.push({ kind: 'timeslow', owner: car, power: pow, left: dur, update(dt) { return (this.left -= dt) > 0; }, dispose() {} });
+    const def = ABILITIES.timeslow;   // the field at base numbers, the owner's part at the node ones (TSLOW)
+    race.hazards.push({ kind: 'timeslow', owner: car, power: Math.min(pow, def.power), left: Math.min(dur, def.duration), update(dt) { return (this.left -= dt) > 0; }, dispose() {} });
+    if (car) Object.assign(car.ability, { active: dur, activeMax: dur, power: pow, t: 0, target: null, tsPassed: null });
+    if (car && isHuman(car)) screenFlash(race, car, TIME_SCREEN);
     const g = _w.copy(at).setY(at.y + 0.15);
     ring(S, g, COLOR.timeslow, { r0: 2, r1: 60, life: 1.1, opacity: 0.8 });
     ring(S, g, '#f0dcff', { r0: 1, r1: 28, life: 0.7, opacity: 0.5 });
@@ -1767,9 +1965,15 @@ function start(race, car, id, dur, pow, pose, target = null) {
       a.active = a.activeMax = dur + HELL_SLING.dur;
       a.side = (car.pos.x - target.pos.x) * -Math.cos(target.heading) + (car.pos.z - target.pos.z) * Math.sin(target.heading) < 0 ? -1 : 1;
     }
+    if (id === 'phase') {   // a ghost for dur, then the dash (PH)
+      a.phaseDur = dur;
+      a.active = a.activeMax = dur + PH.exitT;
+      a.solid = false;
+      a.through = null;
+    }
     if (id === 'robotdash') {   // robot for dur (transform in included), change back, then the dash
       a.robotDur = dur;
-      a.active = a.activeMax = dur + ROBOT_T + ROBOT_BOOST;
+      a.active = a.activeMax = dur + ROBOT_T + ROBOT.dashT * dur / ABILITIES.robotdash.duration;
       if (car.control !== 'net') car.spin = 0;   // shakes off a spin in progress
     }
   }
@@ -2263,7 +2467,7 @@ export function famBlock(race) {
     const al = o.ability.fam.allies[1];
     const p = trackPt(tr, trackS(tr, o.pos, o.trackIndex).s + al.along, al.lat), px = p.x, pz = p.z, fx = Math.sin(al.h), fz = Math.cos(al.h);
     for (const c of race.cars) {
-      if (c === o || c.control === 'net' || c.finished || c._?.left || away(c) || c.mods?.noCollide || c.mods?.invulnerable || c.mods?.reflect) continue;
+      if (c === o || c.control === 'net' || c.finished || c._?.left || away(c) || phased(c) || c.mods?.invulnerable || c.mods?.reflect) continue;
       const dx = c.pos.x - px, dz = c.pos.z - pz;
       if (dx * dx + dz * dz > 64 || dx * fx + dz * fz > 0) continue;   // not near, or level with it / past it
       // a car it is catching (one its owner just passed, or it drives in on) isn't coming at it: it drives through
@@ -2337,7 +2541,7 @@ export function initAbility(race, car) {
     id, name: ABILITIES[id].name, gauge: 0, active: 0, activeMax: 0, power: 0, t: 0,
     slow: 0, slowVis: 0, hit: 0, fx: null, phaseSwap: null, target: null, sealed: false, domVis: 0,
     dfVis: 0, robot: null, body: null, robotDur: 0, robotPh: 0, chained: false, chainFx: null, dive: null, away: false,
-    bounceP: 0, bounceT: 0,   // a slow bounced back onto this car by a reflector: power, s left
+    bounceP: 0, bounceT: 0,   // a slow bounced back onto this car by a reflector (or a face wall's knock): power, s left
   };
   car.spin ??= 0;
   if (id === 'robotdash') attachRobot(car);
@@ -2390,7 +2594,7 @@ export function updateAbilities(race, dt) {
 
   for (const car of race.cars) {
     const a = car.ability || initAbility(race, car);
-    if (a.id === 'tokyodive' && running && !a.away && car.control !== 'net') lapSpeed(race, car, a);
+    if ((a.id === 'tokyodive' || a.id === 'warp') && running && !a.away && car.control !== 'net') lapSpeed(race, car, a);
     if (car.spin > 0) car.spin = Math.max(0, car.spin - dt);
     if (a.bounceT > 0) a.bounceT = Math.max(0, a.bounceT - dt);   // a reflected slow
     if (a.active > 0) {
@@ -2410,11 +2614,10 @@ export function updateAbilities(race, dt) {
         burst(S.glow, _w.setY(car.pos.y + 1), 20, PAL[a.id] === PAL.oil ? PAL.spark : PAL[a.id], 4, 0.5, 0.4, 0.05, 0, 2, 1, 2);
       }
     }
-    if (a.id === 'facewall' && car.control === 'cpu') car.input.ability = a.gauge >= 1 && !(a.active > 0) && faceWanted(race, car);
   }
 
   // timeslow: strongest field not owned by the car; shield ignores it; a reflecting car bounces it onto its owner (and is
-  // free of that field from then on). + a slow bounced back onto this car by a reflector (bounce())
+  // free of that field from then on). + a slow bounced back onto this car by a reflector (bounce()) or a face wall
   for (const car of race.cars) {
     let p = 0;
     for (const hz of race.hazards) {
@@ -2423,10 +2626,17 @@ export function updateAbilities(race, dt) {
       p = Math.max(p, hz.power);
     }
     if (car.mods?.invulnerable || away(car)) p = 0;
-    if (car.ability.bounceT > 0) p = Math.max(p, car.ability.bounceP);
-    car.ability.slow = p;
-    if (p && car.mods) car.mods.speedMul *= Math.max(0, 1 - p);
+    const a = car.ability;   // a field: to (1 - p) of its own recent pace (TSLOW); a bounced slow: of its top, as before
+    a.pace ??= 0;
+    let k = p ? (1 - p) * Math.min(1, Math.max(TSLOW.floor, a.pace / (car.stats?.top || 1))) : 1;
+    // its own pace: frozen under any slow (a field, a dome, a chain, a bounced / face-wall slow, a spin), or it would count twice
+    const slowed = p || a.bounceT > 0 || a.sealed || S.held?.has(car) || car.spin > 0;
+    if (!slowed && running && car.control !== 'net' && !away(car)) a.pace += (Math.max(0, car.speed) - a.pace) * Math.min(1, dt / TSLOW.tau);
+    if (a.bounceT > 0) { p = Math.max(p, a.bounceP); k = Math.min(k, 1 - a.bounceP); }
+    a.slow = p;
+    if (p && car.mods) car.mods.speedMul *= Math.max(0, k);
   }
+  for (const car of race.cars) if (car.ability.id === 'timeslow' && car.ability.active > 0) { tsThrough(race, car); tsPass(race, S, car); }
 
   // downforce: dirty air (乱気流) behind a planted car costs this client's own cars grip (one wake at a time; a planted
   // car keeps its own full grip). Not an attack: a shield or mirrors don't stop air
@@ -2534,7 +2744,7 @@ export function tryActivate(race, car) {
   }
   const def = ABILITIES[a.id];
   let dur = def.duration * (car.stats?.abilityDuration || 1), pow = def.power * (car.stats?.abilityPower || 1);
-  const pose = { x: car.pos.x, y: car.pos.y, z: car.pos.z, h: car.heading, i: car.trackIndex };
+  const pose = { x: car.pos.x, y: car.pos.y, z: car.pos.z, h: car.heading, i: car.trackIndex, ...(a.id === 'warp' && { jump: warpJump(race, car) }) };
   a.gauge = 0;
   // before start(): in split screen a thunderbolt victim's '落雷!' must be the flash that stays
   if (isHuman(car)) flash(race, who(race, car) + def.name + '!', COLOR[a.id]);
@@ -2550,7 +2760,7 @@ export function tryActivate(race, car) {
   start(race, car, a.id, dur, pow, pose, target);
   if (race.net && car.control === 'p1') {
     race.net.send({ t: 'ability', pid: race.localPid, id: a.id, x: r2(pose.x), y: r2(pose.y), z: r2(pose.z), h: r2(pose.h), dur: r2(dur), pow: r2(pow), ...(target?.pid != null && { tp: String(target.pid) }),
-      ...(a.fam && { fam: famMsg(a.fam) }) });   // family: who comes
+      ...(a.fam && { fam: famMsg(a.fam) }), ...(pose.jump != null && { wd: r2(pose.jump) }) });   // family: who comes; warp: its jump (m)
   }
   return true;
 }
@@ -2586,7 +2796,8 @@ export function applyRemoteAbility(race, msg) {
   // peer data is untrusted: cap at 2x base (skill tree max is +25%)
   const dur = clamp(num(msg.dur, def.duration * (car?.stats?.abilityDuration || 1)), 0, def.duration * 2);
   const pow = clamp(num(msg.pow, def.power * (car?.stats?.abilityPower || 1)), 0, def.power * 2);
-  const pose = { x: num(msg.x, car?.pos.x ?? 0), y: num(msg.y, car?.pos.y ?? 0), z: num(msg.z, car?.pos.z ?? 0), h: num(msg.h, car?.heading ?? 0), i: car?.trackIndex };
+  const pose = { x: num(msg.x, car?.pos.x ?? 0), y: num(msg.y, car?.pos.y ?? 0), z: num(msg.z, car?.pos.z ?? 0), h: num(msg.h, car?.heading ?? 0), i: car?.trackIndex,
+    ...(msg.id === 'warp' && { jump: clamp(num(msg.wd, 0), 0, (race.track?.length || 0) / 2) }) };
   const target = msg.tp != null ? race.cars.find(c => c.pid != null && String(c.pid) === String(msg.tp)) || null : null;
   if (msg.id === 'tokyodive' && msg.out) {   // the diver came back there: show it once its car gets there
     const d = car?.ability?.dive;
