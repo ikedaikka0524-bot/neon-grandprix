@@ -118,7 +118,8 @@ async function setup(ctx, root, opts, mode) {
 
   // ---- cars
   // CPU difficulty (solo only: the other modes have no CPUs; finished players' autopilot drives like 'normal')
-  ctx.lv = DIFFICULTY_BY_ID[mode === 'solo' && Object.hasOwn(DIFFICULTY_BY_ID, String(opts.cpuLevel)) ? opts.cpuLevel : 'normal'];
+  race.cpuLevel = mode === 'solo' && Object.hasOwn(DIFFICULTY_BY_ID, String(opts.cpuLevel)) ? opts.cpuLevel : 'normal';
+  ctx.lv = DIFFICULTY_BY_ID[race.cpuLevel];
   if (ctx.lv.corner) track.line = racingLine(track);   // ~0.1 s: behind the loading screen, not in the first frame
   const { list, grid } = buildEntries(opts, mode, ctx.lv);
   if (!track.line && list.some(e => e.stats?.ability === 'family')) track.famLine = racingLine(track);   // the family's lead ally drives it

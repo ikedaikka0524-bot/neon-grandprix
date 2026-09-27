@@ -65,7 +65,7 @@ export const CARS = [
   { id: 'ur_changer', name: 'レトロ・チェンジャー', rarity: 'UR', body: 'kei', color: '#efe6cf', ability: 'robotdash', passive: null, base: { top: 67, accel: 20, grip: 0.88, steer: 2.3, mass: 1.6 } },
   { id: 'ur_inferno', name: 'インフェルノ・キャット', rarity: 'UR', body: 'muscle', color: '#d9151b', ability: 'hellchain', passive: null, base: { top: 73, accel: 23, grip: 0.84, steer: 2.0, mass: 1.6 } },
   { id: 'ur_megaface', name: 'メガフェイス', rarity: 'UR', body: 'kei', color: '#b9744f', ability: 'facewall', passive: null, base: { top: 68, accel: 20, grip: 0.86, steer: 2.1, mass: 1.5 } },
-  { id: 'ur_fortune', name: 'フォーチュン・ドリフター', rarity: 'UR', body: 'sports', color: '#ff8a00', ability: 'tokyodive', passive: 'drift', base: { top: 73, accel: 22, grip: 0.90, steer: 2.5, mass: 1.1 } },
+  { id: 'ur_fortune', name: 'フォーチュン・ドリフター', rarity: 'UR', body: 'sports', color: '#ff8a00', ability: 'tokyodive', passive: 'drift', base: { top: 72, accel: 22, grip: 0.88, steer: 2.5, mass: 1.1 } },
   { id: 'ur_streak', name: 'ブルー・ストリークR', rarity: 'UR', body: 'sports', color: '#a9aeb5', ability: 'family', passive: null, base: { top: 73, accel: 22, grip: 0.90, steer: 2.3, mass: 1.2 } },
 ];
 for (const c of CARS) c.modelRot ??= Math.PI / 2;   // models/*.glb are authored nose toward -X

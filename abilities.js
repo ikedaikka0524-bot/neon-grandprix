@@ -1792,8 +1792,13 @@ function start(race, car, id, dur, pow, pose, target = null) {
 // per dive over just driving on, ~+3.4 s with every node (oni AI; CONTRACT.md). Power and node a2 touch only the pocket part and the boost. A CPU
 // drives it like a clean run: DIVE.cpuIn m/s, back at the exit (RUN). A remote diver is only hidden here: its own client
 // runs the dive and sends { out: 1 } with where it came back (every client then shows the boost and the guard).
-// cpuIn is per real second (the pocket's clock runs 1.25x): 54 = ~302 m in 5.6 s, a clean pocket run
-const DIVE = { lead: 0.3, minSpeed: 15, base: 0.7, inside: 0.7, cpuIn: 54, remoteSlack: 1.5, near: 25, boost: 0.4, boostT: 2, guard: 1.5 };
+// cpuIn is per real second (the pocket's clock runs 1.25x): 54 = ~302 m in 5.6 s, a clean pocket run.
+// cpuEff: a CPU's pocket pace x cpuIn by the race's difficulty (race.cpuLevel): a human has to drive the pocket, a CPU
+// was credited a perfect run every time (oni ur_fortune won ~90% of mixed UR races; oni 0.63: ~45%, CONTRACT.md). Below 1
+// it is away longer (up to dur) and credited less; a human's dive (d.human) never reads it
+const DIVE = { lead: 0.3, minSpeed: 15, base: 0.7, inside: 0.7, cpuIn: 54, remoteSlack: 1.5, near: 25, boost: 0.4, boostT: 2, guard: 1.5,
+  cpuEff: { easy: 0.47, normal: 0.53, hard: 0.58, oni: 0.63, legend: 0.68 } };
+export const __dive = DIVE;   // balance harness only (tools)
 const DIVE_T = ABILITIES.tokyodive.duration;
 const diveGain = (race, car, d, t, inside) => roadAhead(race.track, car, d.entry?.i ?? car.trackIndex, Math.min(t, DIVE_T) * DIVE.base + d.pow * inside / DIVE.cpuIn * DIVE.inside);
 // m the car covers in sec s on from sample i at its own last speed there (a.lapV), or where it hasn't been yet its top
@@ -1857,7 +1862,8 @@ function diveStart(race, S, car, dur, pow, pose) {
   a.power = pow;
   a.t = 0;
   a.landed = false;
-  a.dive = { t: 0, phase: 'gate', dur, pow, speed0: spd, human: isHuman(car), remote };
+  const human = isHuman(car);
+  a.dive = { t: 0, phase: 'gate', dur, pow, speed0: spd, human, remote, v: DIVE.cpuIn * (human ? 1 : DIVE.cpuEff[race.cpuLevel] ?? 1) };
 }
 
 // back on the road: the ネオン・ブースト (applyOwn) runs on as the ability's active time, longer with node a2 (d.dur);
@@ -1898,7 +1904,7 @@ function diveStep(race, S, car, dt) {
     diveHud(race, S, car, `異空間ダイブ　残り ${Math.max(0, d.dur - d.inT).toFixed(1)}秒　+${Math.round(diveGain(race, car, d, d.inT, d.maxS - d.s0))}m`);
     if (s >= D.exitS) { diveOut(race, S, car); return; }
   }
-  if (d.inT >= (d.D ? d.dur : Math.min(d.dur, RUN / DIVE.cpuIn))) diveOut(race, S, car);
+  if (d.inT >= (d.D ? d.dur : Math.min(d.dur, RUN / d.v))) diveOut(race, S, car);
 }
 
 function diveIn(race, S, car) {
@@ -1931,7 +1937,7 @@ function diveIn(race, S, car) {
 function diveOut(race, S, car) {
   const a = car.ability, d = a.dive, tr = race.track, L = tr?.length || 1;
   const e = d.entry || { x: car.pos.x, y: car.pos.y, z: car.pos.z, h: car.heading, i: car.trackIndex };
-  const inside = d.D ? d.maxS - d.s0 : Math.min(DIVE.cpuIn * d.inT, RUN);
+  const inside = d.D ? d.maxS - d.s0 : Math.min(d.v * d.inT, RUN);
   const dist = clamp(diveGain(race, car, d, DIVE_T, inside) || 0, 0, L * 0.9);   // reaching the exit early still earns the full base
   const dest = warpDest(race, e, dist);
   // a difficulty CPU (game.js racing line) lands on its line, heading along it: at the offset it went in with it landed
