@@ -208,7 +208,8 @@ function bakePaint(src, stockHex, hex, root, mat) {
     const data = g.getImageData(0, 0, c.width, c.height), d = data.data, samples = d.length / 16;
     // 1) find the paint: white/grey cars by low saturation, others by the dominant hue near the stock hue
     hsv(...rgb255(stockHex));
-    const neutral = S < 0.25, stockH = H, sk = Math.min(1, S / 0.4);   // muted paint (the robot's tan): gates scale down
+    // muted paint (the robot's tan, ur_vintage's sage at S 0.17): gates scale down; neutral = the greys / whites (S ≤ 0.14)
+    const neutral = S < 0.15, stockH = H, sk = Math.min(1, S / 0.4);
     let hue = 0;
     if (!neutral) {
       const bins = new Float32Array(36);
@@ -974,6 +975,11 @@ const ACCENTS = {
     for (const x of [0.6, 0.38]) pair(s, new THREE.TorusGeometry(0.1, 0.014, 6, 20), m.glow, x, 0.66, 2.4); // halo rings
     add(s, box(1.7, 0.05, 0.24), m.body, 0, 1.03, -2.16).rotation.x = 0.22;                                  // ducktail
     add(s, box(1.86, 0.03, 0.22), m.black, 0, 0.27, 2.36);                                                   // splitter
+  },
+  ur_vintage(s, m) {   // 1970 muscle coupe: the builder's hood / roof / deck stripes in black, black scoop top and chin spoiler
+    m.accent.color.set(0x111114);
+    add(s, box(0.62, 0.03, 0.72), m.black, 0, 1.075, 1.23);
+    add(s, box(1.7, 0.06, 0.16), m.black, 0, 0.27, 2.32);
   },
   ur_fortune(s, m) {   // orange / black two-tone widebody: black roof, arch flares, skirts and ducktail
     add(s, box(1.3, 0.03, 0.66), m.black, 0, 1.195, -0.5);

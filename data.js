@@ -28,6 +28,7 @@ export const ABILITIES = {
   facewall: { name: 'フェイス・ウォール', desc: '左右に顔がどんどん増えて横一列に並び、回転しながら後ろへ下がって道をふさぐ。後ろの車は前に出られず、ぶつかるとはじき返されて減速。その間に自分はダッシュで引き離す', fill: 24, duration: 5, power: 1 }, // duration = wall time, power = x the knock-back slow (abilities.js FACE: the row's drop back, the owner's dash)
   tokyodive: { name: 'トーキョー・ダイブ', desc: 'ネオンのゲートから夜の東京の異空間へ6秒間ダイブ。戻ると大きく前方へ飛び出し、異空間で走った距離の分だけさらに前へ。着地後2秒間はネオン・ブーストで加速し、最初の1.5秒は無敵', fill: 28, duration: 6, power: 1 }, // power = multiplier on the jump's pocket part (and on the landing boost, up to 1) (abilities.js DIVE)
   reflect: { name: 'リフレクト', desc: 'ボディの鏡が光り、4秒間 自分を狙った攻撃をぜんぶ撃った相手にはね返す（ぶつかられても減速しない）', fill: 22, duration: 4, power: 1 }, // power = strength of what bounces back (x the attack's own; abilities.js REFLECT)
+  pinkslip: { name: 'ピンクスリップ', desc: 'すぐ前の車に10秒間の一騎打ちを挑む。10秒後に前にいた方の勝ち。勝てば相手の能力ゲージを全部奪って加速、負ければ自分のゲージを奪われる', fill: 24, duration: 2, power: 0.08 }, // duration = the winner's burst s, power = the challenger's pace bonus during the duel (abilities.js PINK: range, duel s, burst, stall)
   family: { name: 'ファミリー', desc: '「ファミリー」の車が2台かけつけて一緒に走る。前の仲間の後ろで強力なスリップストリーム、後ろの仲間は追ってくる車をブロック', fill: 30, duration: 7, power: 1 }, // duration = formation s, power = drafting strength (abilities.js FAM)
 };
 
@@ -66,6 +67,7 @@ export const CARS = [
   { id: 'ur_inferno', name: 'インフェルノ・キャット', rarity: 'UR', body: 'muscle', color: '#d9151b', ability: 'hellchain', passive: null, base: { top: 73, accel: 23, grip: 0.84, steer: 2.4, mass: 1.6 } },
   { id: 'ur_megaface', name: 'メガフェイス', rarity: 'UR', body: 'kei', color: '#b9744f', ability: 'facewall', passive: null, base: { top: 73, accel: 22, grip: 0.88, steer: 2.4, mass: 1.5 } },
   { id: 'ur_fortune', name: 'フォーチュン・ドリフター', rarity: 'UR', body: 'sports', color: '#ff8a00', ability: 'tokyodive', passive: 'drift', base: { top: 72, accel: 22, grip: 0.88, steer: 2.5, mass: 1.1 } },
+  { id: 'ur_vintage', name: "ヴィンテージ・マッスル'70", rarity: 'UR', body: 'muscle', color: '#515748', ability: 'pinkslip', passive: null, base: { top: 73, accel: 24, grip: 0.85, steer: 2.4, mass: 1.5 } },
   { id: 'ur_streak', name: 'ブルー・ストリークR', rarity: 'UR', body: 'sports', color: '#a9aeb5', ability: 'family', passive: null, base: { top: 73, accel: 22, grip: 0.90, steer: 2.3, mass: 1.2 } },
 ];
 for (const c of CARS) c.modelRot ??= Math.PI / 2;   // models/*.glb are authored nose toward -X

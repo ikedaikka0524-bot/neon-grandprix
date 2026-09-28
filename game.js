@@ -806,7 +806,7 @@ function updateHud(ctx, v) {
     setCls(h.abil, 'ready', g >= 1 && !on && !sealed);
     setCls(h.abil, 'active', on);
     setCls(h.abil, 'sealed', sealed);
-    setText(h.ready, on ? '発動中!' : sealed ? '封印中' : g >= 1 ? 'READY!' : '');
+    setText(h.ready, on ? '発動中!' : ab.duel ? '勝負中!' : sealed ? '封印中' : g >= 1 ? 'READY!' : '');
   }
   const boosting = car.mods.speedMul > 1.02 || car.mods.accelMul > 1.02;
   setCls(h.slip, 'on', c.slip > 0.02);
@@ -990,7 +990,7 @@ function aiInput(ctx, car, dt) {
   for (const o of race.cars) {
     // away: diving (tokyodive), parked or hidden, not on this road. noCollide (a phase ghost, a timeslow owner: last frame's
     // mods): it drives through them - queueing / swerving to pass at the ghost's 100+ m/s ran it into Monaco's barrier
-    if (o === car || o._.left || o._.away || car.mods.noCollide) continue;
+    if (o === car || o._.left || o._.away || car.mods.noCollide || o.ability?.duel?.tg === car || car.ability?.duel?.tg === o) continue;   // (a duel rival: no contact)
     const dx = o.pos.x - car.pos.x, dz = o.pos.z - car.pos.z, along = dx * fx + dz * fz, lat = -dx * fz + dz * fx;
     // passing: hold the pass line until PASS.clear m ahead of it (merging back sooner would hit it); into a corner only
     // once alongside, else it drops back in behind
@@ -1095,7 +1095,7 @@ function aiInput(ctx, car, dt) {
       c.abilDelay = (c.abilDelay ?? 0) + dt;
       // (not a warp: a straight isn't enough, it needs room to brake after the jump)
       const why = cpuAbility(race, car, { straight: c.straight, corner: c.corner, room: c.room })
-        || (c.abilDelay > lv.hold && c.straight > 60 && !['oil', 'warp', 'reflect'].includes(ab.id) && !mirrorBlocks(race, ab.id) && 'hold');   // reflect: useless unless attacked
+        || (c.abilDelay > lv.hold && c.straight > 60 && !['oil', 'warp', 'reflect', 'pinkslip'].includes(ab.id) && !mirrorBlocks(race, ab.id) && 'hold');   // reflect: useless unless attacked; pinkslip: a car 60-120 m ahead is seldom caught
       if (why) { inp.ability = true; c.abilDelay = null; c.abilWhy = why; }
     } else {
       if (c.abilDelay == null) c.abilDelay = lv.tactics === 'late' ? 4 + Math.random() * 8 : Math.random() * 4;
@@ -1244,7 +1244,8 @@ function collide(ctx) {
   const solid = c => !c._.left && !c.mods.noCollide && (c.control !== 'net' || now - (c._.net?.t ?? -Infinity) < NET_STALE);
   for (let i = 0; i < cars.length; i++) for (let j = i + 1; j < cars.length; j++) {
     const a = cars[i], b = cars[j];
-    if ((a.control === 'net' && b.control === 'net') || !solid(a) || !solid(b)) continue;
+    // pinkslip: the two cars of a duel pass through each other while it runs (a race: no blocking, no ramming)
+    if ((a.control === 'net' && b.control === 'net') || !solid(a) || !solid(b) || a.ability?.duel?.tg === b || b.ability?.duel?.tg === a) continue;
     const ha = a._.hit, hb = b._.hit;
     if ((b.pos.x - a.pos.x) ** 2 + (b.pos.z - a.pos.z) ** 2 > (ha.reach + hb.reach) ** 2) continue;
     let best = null;
