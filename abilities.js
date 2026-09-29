@@ -1854,9 +1854,13 @@ export function cpuAbility(race, car, road) {
     // worth it: the target's gauge ≥ rich, or within half that reach. Never the 'hold' fallback (game.js). Never while the
     // target's own ability runs: most speed it up, some only after a ramp (family's formation reads ~1 for its first ~0.4 s,
     // then +35 % for 7 s), so last frame's speedMul can't tell
+    // Defensive (nobody ahead within PINK.range, so the target is the nearest car behind): dmin..PINK.back m back, its gauge ≥
+    // drich or the gauge has waited dwait s (a full gauge held while leading was most of the car's idle time)
     case 'pinkslip': {
       const t = pinkTarget(race, car), g = t ? gap(t) : 0;
-      if (!t || g < PINK_CPU.min || g > PINK_CPU.max || t.ability?.active > 0) return false;
+      if (!t || t.ability?.active > 0) return false;
+      if (g <= 0) return -g >= PINK_CPU.dmin && ((t.ability?.gauge || 0) >= PINK_CPU.drich || car._.abilDelay > PINK_CPU.dwait) && `defend ${Math.round(-g)}m`;
+      if (g < PINK_CPU.min || g > PINK_CPU.max) return false;
       const edge = (car.stats?.top || 1) / ((t.stats?.top || car.stats?.top || 1) * (t.control === 'net' ? 1 : t.mods?.speedMul || 1)) - 1;
       const reach = PINK.dur * Math.max(0, car.speed) * (PINK_CPU.k * ABILITIES.pinkslip.power * (car.stats?.abilityPower || 1) + edge) * PINK_CPU.sure;
       return g < reach && ((t.ability?.gauge || 0) >= PINK_CPU.rich || g < reach / 2) && `target ${Math.round(g)}m of ${Math.round(reach)}`;
@@ -1923,7 +1927,7 @@ function start(race, car, id, dur, pow, pose, target = null) {
   const S = st(race), at = new THREE.Vector3(pose.x, pose.y, pose.z);
   if (id === 'tokyodive') { diveStart(race, S, car, dur, pow, pose); return; }
   if (id === 'family') { famStart(race, S, car, dur, pow, pose); return; }
-  if (id === 'pinkslip') { pinkStart(race, S, car, target, dur, pow, pose.n); return; }
+  if (id === 'pinkslip') { pinkStart(race, S, car, target, dur, pow, pose.n, pose.def); return; }
   if (id === 'warp') {
     const d = warpDest(race, pose, pose.jump || 0), tr = race.track;
     // a difficulty CPU lands on its racing line, heading along it (as diveOut): at its old offset it landed off the line
@@ -2550,7 +2554,9 @@ function updateTint(race, S) {
 
 // ---------- pinkslip ----------
 // ヴィンテージ・マッスル'70: a PINK.dur s one-on-one race with the nearest car ahead (pinkTarget: ≤ PINK.range m by drawn
-// progress, not away / finished / left; nobody → nothing fires and the gauge is kept). Meanwhile the challenger gets speed /
+// progress, not away / finished / left), or with nobody there the nearest one ≤ PINK.back m behind (a defensive duel, d.def:
+// the challenger has to stay ahead; start message df 1); nobody → nothing fires and the gauge is kept. Either way whoever is
+// ahead at the end wins, and the rewards / penalties are the same. Meanwhile the challenger gets speed /
 // accel + power (the challenge pace) and can't fire again (its gauge refills as usual); the target races on and may use its
 // own ability. Then whoever is ahead on the track wins: the challenger takes all of the target's gauge (capped at full) and a
 // burst (+ PINK.burst for `duration` s: its active time), or the target takes the challenger's gauge and the challenger stalls
@@ -2563,14 +2569,28 @@ function updateTint(race, S) {
 // changes its own gauge: lost (w 1) → it pays what it has right then with { pay:1, n, cp, g } (also 3 times; the challenger
 // adds it once), won → + g (the challenger's gauge, read live by its own client). Each gauge is read only by its own client,
 // so none is created or lost. A copy of a start already seen is ignored (pinkSeen). Value: CONTRACT.md 'Pink slip (v10)'.
-const PINK = { range: 120, dur: 10, grip: 2, burst: 0.3, stall: 0.35, stallT: 1, wait: 12, resend: [0.5, 1.5] };
+// range = PINK_CPU.max: a car further ahead is seldom caught, so then the duel goes to the car behind; back: how far behind a
+// defensive duel's target may be (nobody ahead within range)
+const PINK = { range: 60, back: 200, dur: 10, grip: 2, burst: 0.15, stall: 0.2, stallT: 1, wait: 12, resend: [0.5, 1.5] };
 // CPU (hard+, cpuAbility): a target min..max m ahead within `sure` x the m it can expect to gain in the duel (k x its challenge
-// pace + its top-speed edge, x the road it covers in PINK.dur s); worth it: the target's gauge ≥ rich, or within half that
-const PINK_CPU = { min: 5, max: 60, k: 0.7, sure: 0.8, rich: 0.5 };
+// pace + its top-speed edge, x the road it covers in PINK.dur s); worth it: the target's gauge ≥ rich, or within half that.
+// Defensive (nobody ahead within range): a target dmin..PINK.back m behind whose gauge ≥ drich, or any once the gauge has
+// waited dwait s
+const PINK_CPU = { min: 5, max: 60, k: 0.7, sure: 0.8, rich: 0.5, dmin: 10, drich: 0.3, dwait: 3 };
 export const __pink = PINK, __pinkCpu = PINK_CPU;   // balance harness only (tools)
 COLOR.pinkslip = '#ff4fa3';
 PAL.pinkslip = pal('#ffffff', '#ffc2e0', '#ff7ac0', '#ff2f92', '#b0126a');
-const pinkTarget = (race, car) => magnetTarget(race, car, 0, PINK.range);
+// the nearest car ahead within PINK.range; nobody → the nearest one behind within PINK.back (a defensive duel: stay ahead)
+function pinkTarget(race, car) {
+  let best = magnetTarget(race, car, 0, PINK.range), bg = -PINK.back;
+  if (!best) for (const c of race.cars) {
+    if (c === car || c.finished || c._?.left || away(c)) continue;
+    const g = magnetGap(race, car, c);
+    if (g <= 0 && g >= bg) { bg = g; best = c; }
+  }
+  return best;
+}
+const PINK_KIND = ['挑戦！', '逃げ切れ！'];   // this car's goal on its HUD: pass / stay ahead (the challenger's is d.def, the target's the reverse)
 
 function slipTex() {   // the wager: a pink title slip (256 x 148, the plane's 1.3 x 0.75)
   const c = document.createElement('canvas');
@@ -2594,11 +2614,13 @@ function slipTex() {   // the wager: a pink title slip (256 x 148, the plane's 1
 }
 const slipMat = S => (S.slipMat ||= new THREE.MeshBasicMaterial({ map: tex(S, 'slip'), side: THREE.DoubleSide, transparent: true, toneMapped: false }));
 
-// n: the challenger's per-race duel number (its own client counts; a remote one's comes with its message)
-function pinkStart(race, S, ch, tg, bdur, pow, n) {
+// n: the challenger's per-race duel number (its own client counts; a remote one's comes with its message); def: defensive
+// (the target was behind: the challenger has to stay ahead; its own client measures it, a remote one's comes with its message)
+function pinkStart(race, S, ch, tg, bdur, pow, n, def) {
   if (!ch?.ability || !tg || tg === ch) return null;
   const own = ch.control !== 'net';
   n ??= S.pn = (S.pn || 0) + 1;
+  def ??= magnetGap(race, ch, tg) <= 0;
   const key = `${own ? '' : ch.pid}:${n}`;
   // its result came first, or a copy of a start already seen (QoS1 is at-least-once: a sender's reconnect resends it)
   if ((S.pinkDone ||= new Set()).has(key) || (S.pinkSeen ||= new Set()).has(key)) return null;
@@ -2610,7 +2632,7 @@ function pinkStart(race, S, ch, tg, bdur, pow, n) {
   link.visible = slip.visible = false;
   S.root.add(link, slip);
   const pts = Array.from({ length: CHAIN_SEG + 1 }, () => new THREE.Vector3());
-  const d = { ch, tg, n, key, own, t: 0, bdur, pow, r0: [ch._?.resets || 0, tg._?.resets || 0], link, slip, pts,
+  const d = { ch, tg, n, key, own, def: !!def, t: 0, bdur, pow, r0: [ch._?.resets || 0, tg._?.resets || 0], link, slip, pts,
     segs: pts.slice(1).map((p, i) => [pts[i], p, 0.5]), base: Float32Array.from(slip.geometry.attributes.position.array) };
   if (race.pinkLog) d.g0 = magnetGap(race, ch, tg);   // balance harness only
   ch.ability.duel = d;
@@ -2619,7 +2641,7 @@ function pinkStart(race, S, ch, tg, bdur, pow, n) {
     ring(S, _w.set(c.pos.x, c.pos.y + 0.15, c.pos.z), COLOR.pinkslip, { r0: 1.5, r1: 7, life: 0.5 });
     burst(S.glow, _w.setY(c.pos.y + 1.2), 30, PAL.pinkslip, 6, 0.5, 0.45, 0.05, 0, 2);
   }
-  if (isHuman(tg)) { flash(race, who(race, tg) + '勝負を挑まれた!', COLOR.pinkslip); race.hud?.shake?.(tg, 0.2); }
+  if (isHuman(tg)) { flash(race, who(race, tg) + (d.def ? '逃げ切り勝負を挑まれた!' : '勝負を挑まれた!'), COLOR.pinkslip); race.hud?.shake?.(tg, 0.2); }
   return d;
 }
 
@@ -2743,7 +2765,7 @@ function pinkVisuals(race, S, d, dt) {
   d.slip.rotation.set(0.15 * Math.sin(t * 2.3), ch.heading + Math.PI + 0.25 * Math.sin(t * 1.7), 0.12 * Math.sin(t * 3.1));
 }
 
-// PINK SLIP banner + countdown + who leads, on the HUD of every human in a duel (either side). In several at once (challenged
+// PINK SLIP banner + this car's goal (挑戦！ / 逃げ切れ！) + countdown + who leads, on the HUD of every human in a duel (either side). In several at once (challenged
 // and challenging, or two challengers): its own challenge big (the one it fired), the others oldest first on a small line
 function pinkHud(race, S) {
   if (typeof document === 'undefined') return;
@@ -2757,23 +2779,25 @@ function pinkHud(race, S) {
       const layer = race.hud?.layer?.(car);
       if (!layer) continue;
       el = S.tint[key] = document.createElement('div');
-      el.innerHTML = '<div>PINK SLIP</div><div></div><div></div><div></div>';
+      el.innerHTML = '<div>PINK SLIP</div><div></div><div></div><div></div><div></div>';
       Object.assign(el.style, { position: 'absolute', left: '50%', top: '11%', transform: 'translateX(-50%) scale(var(--z, 1))', transformOrigin: '50% 0', textAlign: 'center',
         pointerEvents: 'none', whiteSpace: 'nowrap', font: '800 17px/1.3 system-ui,sans-serif', color: '#fff', textShadow: '0 0 8px #ff2f92, 0 2px 6px rgba(0,0,0,.75)' });
       Object.assign(el.children[0].style, { font: 'italic 900 34px/1 system-ui,sans-serif', color: '#ff8fc8', letterSpacing: '0.1em', textShadow: '0 0 14px #ff2f92, 0 0 3px #fff, 0 3px 8px rgba(0,0,0,.6)' });
-      Object.assign(el.children[1].style, { font: 'italic 900 42px/1.15 ui-monospace,Consolas,monospace', color: '#ffe3f1' });
-      Object.assign(el.children[3].style, { font: '700 14px/1.3 system-ui,sans-serif', color: '#ffd0e6' });
+      Object.assign(el.children[1].style, { font: '900 22px/1.2 system-ui,sans-serif', color: '#fff', letterSpacing: '0.05em' });
+      Object.assign(el.children[2].style, { font: 'italic 900 42px/1.15 ui-monospace,Consolas,monospace', color: '#ffe3f1' });
+      Object.assign(el.children[4].style, { font: '700 14px/1.3 system-ui,sans-serif', color: '#ffd0e6' });
       el.animate?.([{ opacity: 0, filter: 'brightness(3)' }, { opacity: 1, filter: 'none' }], { duration: 350, easing: 'ease-out' });
       layer.appendChild(el);
     }
+    const kind = x => PINK_KIND[+(x.def !== (x.tg === car))];   // the target's goal is the challenger's reversed
     const line = x => {   // [countdown, lead / deficit vs the other car (+ = this car ahead)]
       const other = x.ch === car ? x.tg : x.ch, left = PINK.dur - x.t, gap = Math.round(magnetGap(race, other, car));
       return [left > 0 ? left.toFixed(1) : '判定中…', `${gap >= 0 ? 'リード +' : 'ビハインド −'}${Math.abs(gap)}m ・ vs ${other.name}`, gap];
     };
-    const [left, txt, gap] = line(d), more = ds.slice(1).map(x => { const [l, t] = line(x); return `${t} (${l})`; }).join(' / ');
-    for (const [i, s] of [left, txt, more].entries()) if (el.children[i + 1].textContent !== s) el.children[i + 1].textContent = s;
+    const [left, txt, gap] = line(d), more = ds.slice(1).map(x => { const [l, t] = line(x); return `${kind(x)} ${t} (${l})`; }).join(' / ');
+    for (const [i, s] of [kind(d), left, txt, more].entries()) if (el.children[i + 1].textContent !== s) el.children[i + 1].textContent = s;
     const col = gap >= 0 ? '#7dffb2' : '#ff8a8a';
-    if (el.children[2].__c !== col) { el.children[2].__c = col; el.children[2].style.color = col; }
+    if (el.children[3].__c !== col) { el.children[3].__c = col; el.children[3].style.color = col; }
   }
 }
 
@@ -3038,7 +3062,7 @@ export function tryActivate(race, car) {
   start(race, car, a.id, dur, pow, pose, target);
   if (race.net && car.control === 'p1') {
     race.net.send({ t: 'ability', pid: race.localPid, id: a.id, x: r2(pose.x), y: r2(pose.y), z: r2(pose.z), h: r2(pose.h), dur: r2(dur), pow: r2(pow), ...(target?.pid != null && { tp: String(target.pid) }),
-      ...(a.fam && { fam: famMsg(a.fam) }), ...(pose.jump != null && { wd: r2(pose.jump) }), ...(a.duel && { n: a.duel.n }) });   // family: who comes; warp: its jump (m); pinkslip: its duel number
+      ...(a.fam && { fam: famMsg(a.fam) }), ...(pose.jump != null && { wd: r2(pose.jump) }), ...(a.duel && { n: a.duel.n, ...(a.duel.def && { df: 1 }) }) });   // family: who comes; warp: its jump (m); pinkslip: its duel number, df: defensive
   }
   return true;
 }
@@ -3077,7 +3101,7 @@ export function applyRemoteAbility(race, msg) {
   const dur = clamp(num(msg.dur, def.duration * (car?.stats?.abilityDuration || 1)), 0, def.duration * 2);
   const pow = clamp(num(msg.pow, def.power * (car?.stats?.abilityPower || 1)), 0, def.power * 2);
   const pose = { x: num(msg.x, car?.pos.x ?? 0), y: num(msg.y, car?.pos.y ?? 0), z: num(msg.z, car?.pos.z ?? 0), h: num(msg.h, car?.heading ?? 0), i: car?.trackIndex,
-    ...(msg.id === 'warp' && { jump: clamp(num(msg.wd, 0), 0, (race.track?.length || 0) / 2) }), ...(msg.id === 'pinkslip' && { n: num(msg.n, -1) }) };
+    ...(msg.id === 'warp' && { jump: clamp(num(msg.wd, 0), 0, (race.track?.length || 0) / 2) }), ...(msg.id === 'pinkslip' && { n: num(msg.n, -1), def: msg.df === 1 }) };
   const target = msg.tp != null ? race.cars.find(c => c.pid != null && String(c.pid) === String(msg.tp)) || null : null;
   if (msg.id === 'tokyodive' && msg.out) {   // the diver came back there: show it once its car gets there
     const d = car?.ability?.dive;

@@ -28,7 +28,7 @@ export const ABILITIES = {
   facewall: { name: 'フェイス・ウォール', desc: '左右に顔がどんどん増えて横一列に並び、回転しながら後ろへ下がって道をふさぐ。後ろの車は前に出られず、ぶつかるとはじき返されて減速。その間に自分はダッシュで引き離す', fill: 24, duration: 5, power: 1 }, // duration = wall time, power = x the knock-back slow (abilities.js FACE: the row's drop back, the owner's dash)
   tokyodive: { name: 'トーキョー・ダイブ', desc: 'ネオンのゲートから夜の東京の異空間へ6秒間ダイブ。戻ると大きく前方へ飛び出し、異空間で走った距離の分だけさらに前へ。着地後2秒間はネオン・ブーストで加速し、最初の1.5秒は無敵', fill: 28, duration: 6, power: 1 }, // power = multiplier on the jump's pocket part (and on the landing boost, up to 1) (abilities.js DIVE)
   reflect: { name: 'リフレクト', desc: 'ボディの鏡が光り、4秒間 自分を狙った攻撃をぜんぶ撃った相手にはね返す（ぶつかられても減速しない）', fill: 22, duration: 4, power: 1 }, // power = strength of what bounces back (x the attack's own; abilities.js REFLECT)
-  pinkslip: { name: 'ピンクスリップ', desc: 'すぐ前の車に10秒間の一騎打ちを挑む。10秒後に前にいた方の勝ち。勝てば相手の能力ゲージを全部奪って加速、負ければ自分のゲージを奪われる', fill: 24, duration: 2, power: 0.08 }, // duration = the winner's burst s, power = the challenger's pace bonus during the duel (abilities.js PINK: range, duel s, burst, stall)
+  pinkslip: { name: 'ピンクスリップ', desc: 'すぐ前の車に10秒間の一騎打ちを挑む（前に誰もいなければ、すぐ後ろの車に逃げ切り勝負）。10秒後に前にいた方の勝ち。勝てば相手の能力ゲージを全部奪って加速、負ければ自分のゲージを奪われる', fill: 26, duration: 2, power: 0.1 }, // duration = the winner's burst s, power = the challenger's pace bonus during the duel (abilities.js PINK: range, duel s, burst, stall)
   family: { name: 'ファミリー', desc: '「ファミリー」の車が2台かけつけて一緒に走る。前の仲間の後ろで強力なスリップストリーム、後ろの仲間は追ってくる車をブロック', fill: 30, duration: 7, power: 1 }, // duration = formation s, power = drafting strength (abilities.js FAM)
 };
 
