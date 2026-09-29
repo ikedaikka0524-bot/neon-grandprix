@@ -1,9 +1,10 @@
 // Global online leaderboard: Firebase Anonymous Auth + Realtime Database (see SETUP-FIREBASE.md, database.rules.json).
 // The SDK is imported lazily, only when the leaderboard is opened or a time-attack record is sent, so the game loads and
 // runs exactly as before offline / blocked / unconfigured (FIREBASE_CONFIG null → lbReady() false, nothing is sent).
-// Layout: lb/<trackId>/<bucket>/<uid> = { name, race, raceCar, raceAt, lap, lapCar, lapAt, v } (the player's bests;
-// bucket = 'all' | rarity of the car), ghosts/<trackId>/<bucket>/<uid> = { data, time, carId, look, trackId, v }
-// (the ghost of that entry's race time, a separate path so listing stays cheap).
+// Layout: lb2/<trackId>/<bucket>/<uid> = { name, race, raceCar, raceAt, lap, lapCar, lapAt, v } (the player's bests;
+// bucket = 'all' | rarity of the car), ghosts2/<trackId>/<bucket>/<uid> = { data, time, carId, look, trackId, v }
+// (the ghost of that entry's race time, a separate path so listing stays cheap). Seasons: the '2' is SEASON; season 1
+// (lb/, ghosts/, the old balance) is a read-only archive: it is listed and its ghosts raced, never written.
 // Emulator (tests): localStorage 'ngp.lb.emu' = '1' → demo project on 127.0.0.1:9099 (auth) / :9000 (database).
 // Node-safe at import time (tools/gen-rules.mjs, tools/check-lb-rules.mjs import it): no DOM / three.js at top level.
 import { CAR_BY_ID, RARITY_ORDER } from './data.js';
@@ -17,7 +18,12 @@ export const TOP = 50;
 export const RANK_CAP = 1000;
 export const GHOST_MAX = 204800;   // base64 chars; the rules allow the same
 const DT = 0.05, SCALE = [100, 100, 100, 100, 1e4];   // ghost.js frames: x y z heading rounded to 0.01, progress to 1e-4
-const QKEY = 'ngp.lb.queue', ASKED = 'ngp.lb.named';
+export const SEASON = 2;   // every write goes here; the rules make every other season read-only
+// One queue per season: a tab still on an older build only reads its own key, so it never sends (and, once the rules
+// deny it, drops) a season 2 run. The pre-season queue holds season 1 runs, now read-only: never sent, cleared.
+const QKEY = 'ngp.lb.queue' + SEASON, ASKED = 'ngp.lb.named';
+try { localStorage.removeItem('ngp.lb.queue'); } catch {}
+export const lbPath = s => (s > 1 ? `lb${s}` : 'lb'), ghostPath = s => (s > 1 ? `ghosts${s}` : 'ghosts');
 
 const ls = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -130,20 +136,20 @@ export async function checkGhost(g, tid, time) {
 }
 
 /* ---------- reading ---------- */
-async function rankOf(tid, bucket, metric, t) {
+async function rankOf(tid, bucket, metric, t, season) {
   const { D, d } = await fb();
   // ponytail: RTDB has no count query, so this downloads up to RANK_CAP faster entries; past that the rank shows as 1000+
-  const s = await within(D.get(D.query(D.ref(d, `lb/${tid}/${bucket}`), D.orderByChild(metric), D.endAt(t), D.limitToFirst(RANK_CAP + 1))));
+  const s = await within(D.get(D.query(D.ref(d, `${lbPath(season)}/${tid}/${bucket}`), D.orderByChild(metric), D.endAt(t), D.limitToFirst(RANK_CAP + 1))));
   let n = 0;
   s.forEach(c => { const e = clean(c.key, c.val(), tid); if (e && e[metric] < t) n++; });
   return Math.min(n, RANK_CAP) + 1;
 }
 export const rankText = r => (r > RANK_CAP ? `${RANK_CAP}+` : String(r));
 
-// Top TOP of a bucket by metric ('race' | 'lap') + the player's own row (rank computed when outside the top).
-export async function lbTop(tid, bucket, metric) {
+// Top TOP of a bucket by metric ('race' | 'lap') in a season + the player's own row (rank computed when outside the top).
+export async function lbTop(tid, bucket, metric, season = SEASON) {
   const { D, d } = await fb();
-  const s = await within(D.get(D.query(D.ref(d, `lb/${tid}/${bucket}`), D.orderByChild(metric), D.limitToFirst(TOP))));
+  const s = await within(D.get(D.query(D.ref(d, `${lbPath(season)}/${tid}/${bucket}`), D.orderByChild(metric), D.limitToFirst(TOP))));
   const rows = [];
   s.forEach(c => { const e = clean(c.key, c.val(), tid); if (e) rows.push(e); });
   rows.sort((a, b) => a[metric] - b[metric]);
@@ -151,15 +157,15 @@ export async function lbTop(tid, bucket, metric) {
   const uid = await uidOf(false);
   let me = rows.find(e => e.uid === uid) || null;
   if (uid && !me) {
-    const e = clean(uid, (await within(D.get(D.ref(d, `lb/${tid}/${bucket}/${uid}`)))).val(), tid);
-    if (e) me = { ...e, rank: await rankOf(tid, bucket, metric, e[metric]) };
+    const e = clean(uid, (await within(D.get(D.ref(d, `${lbPath(season)}/${tid}/${bucket}/${uid}`)))).val(), tid);
+    if (e) me = { ...e, rank: await rankOf(tid, bucket, metric, e[metric], season) };
   }
   return { rows, me };
 }
 
-export async function lbGhost(tid, bucket, row) {
+export async function lbGhost(tid, bucket, row, season = SEASON) {
   const { D, d } = await fb();
-  const g = (await within(D.get(D.ref(d, `ghosts/${tid}/${bucket}/${row.uid}`)), 20000)).val();
+  const g = (await within(D.get(D.ref(d, `${ghostPath(season)}/${tid}/${bucket}/${row.uid}`)), 20000)).val();
   return { ...await checkGhost(g, tid, row.race), name: row.name, lb: true };
 }
 
@@ -196,26 +202,26 @@ export const lbPending = () => readQ().length > 0;
 
 async function submit(uid, it) {
   const { D, d } = await fb(), name = cleanName(getSave().name), buckets = ['all', rarityOf(it.carId)];
-  const cur = await Promise.all(buckets.map(b => within(D.get(D.ref(d, `lb/${it.trackId}/${b}/${uid}`))).then(s => s.val())));
+  const cur = await Promise.all(buckets.map(b => within(D.get(D.ref(d, `${lbPath(SEASON)}/${it.trackId}/${b}/${uid}`))).then(s => s.val())));
   const upd = {}, won = [];
   buckets.forEach((b, i) => {
     const e = cur[i], race = !(e?.race <= it.race), lap = !(e?.lap <= it.lap);
     if (!race && !lap) return;
     const path = `${it.trackId}/${b}/${uid}`;
-    upd[`lb/${path}`] = {
+    upd[`${lbPath(SEASON)}/${path}`] = {
       name, v: 1,
       race: race ? it.race : e.race, raceCar: race ? it.carId : e.raceCar, raceAt: race ? D.serverTimestamp() : e.raceAt,
       lap: lap ? it.lap : e.lap, lapCar: lap ? it.carId : e.lapCar, lapAt: lap ? D.serverTimestamp() : e.lapAt,
     };
-    if (race) { upd[`ghosts/${path}`] = it.ghost; won.push([b, 'race']); }   // no ghost (too big): drop the stale one
+    if (race) { upd[`${ghostPath(SEASON)}/${path}`] = it.ghost; won.push([b, 'race']); }   // no ghost (too big): drop the stale one
     if (lap) won.push([b, 'lap']);
   });
   if (!won.length) return null;
   await within(D.update(D.ref(d), upd), 30000);
   won.sort((a, b) => (a[1] === 'race' ? 0 : 2) + (a[0] === 'all' ? 0 : 1) - (b[1] === 'race' ? 0 : 2) - (b[0] === 'all' ? 0 : 1));
-  const [b, m] = won[0], rank = await rankOf(it.trackId, b, m, m === 'race' ? it.race : it.lap).catch(() => 0);   // saved even if this fails
+  const [b, m] = won[0], rank = await rankOf(it.trackId, b, m, m === 'race' ? it.race : it.lap, SEASON).catch(() => 0);   // saved even if this fails
   const where = `${m === 'lap' ? 'ベストラップ ' : ''}${b === 'all' ? '世界' : b}ランキング`;
-  return rank ? `${where} ${rankText(rank)}位！` : `${where}に登録しました`;
+  return `${where}${rank ? ` ${rankText(rank)}位！` : 'に登録しました'}（シーズン${SEASON}）`;
 }
 
 // Sends every queued run; resolves to a toast text for the best new rank (or null). Rejects when offline etc.

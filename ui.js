@@ -12,7 +12,7 @@ import { startRace, stopRace, raceBack } from './game.js';
 import { mountTouchSettings } from './touch.js';
 import { hostRoom, joinRoom } from './net.js';
 import { BUILD } from './version.js';
-import { lbReady, lbTop, lbGhost, lbQueue, lbFlush, lbPending, lbNeedsReload, nameAsked, setNameAsked, rarityOf, rankText } from './lb.js';
+import { lbReady, lbTop, lbGhost, lbQueue, lbFlush, lbPending, lbNeedsReload, nameAsked, setNameAsked, rarityOf, rankText, SEASON } from './lb.js';
 import { initSync, syncKick, syncDialogClose, renderSyncSettings, syncLinked } from './sync.js';
 
 /* ================= helpers ================= */
@@ -518,7 +518,7 @@ function renderPrep(mode) {
     $('#ghostBox').innerHTML = (g
       ? `<div class="gh-ok"><span class="gh-ic"></span><div><b>ゴースト ${fmt(g.time)}</b><small>勝てば +${Math.round(ECONOMY.beatGhostBonus * coinMul(tid))} コイン</small></div></div>`
       : '<div class="gh-ok"><div><b>タイムアタック</b><small>ゴーストなし・ひとりで走ってゴーストを作ろう</small></div></div>')
-      + (lbReady() ? '<p class="hint">タイムは世界ランキングに自動で登録されます</p>' : '');
+      + (lbReady() ? `<p class="hint">タイムは世界ランキング（シーズン${SEASON}）に自動で登録されます</p>` : '');
   }
   $('#btnStart').disabled = false;
   $('#prepKeys').innerHTML = mode === 'split' ? KEYS_SPLIT : KEYS_SOLO;
@@ -1143,8 +1143,9 @@ function setName(v) {
 }
 
 /* ================= leaderboard (lb.js) ================= */
-// Time attacks (ghost mode: no CPUs / other players) go to the online ranking per course, overall and per rarity.
-const LB = { metric: 'race', bucket: 'all', tok: 0, rows: [], me: null };
+// Time attacks (ghost mode: no CPUs / other players) go to the online ranking per course, overall and per rarity, in
+// the current season (lb.js SEASON). Older seasons are shown read-only; their ghosts can still be raced.
+const LB = { metric: 'race', bucket: 'all', season: SEASON, tok: 0, rows: [], me: null };
 const ymd = t => { const d = new Date(t); return t ? `${d.getFullYear() === new Date().getFullYear() ? '' : d.getFullYear() + '/'}${d.getMonth() + 1}/${d.getDate()}` : ''; };
 function lbRow(e, me) {
   const m = LB.metric, id = m === 'race' ? e.raceCar : e.lapCar, r = rarityOf(id), go = m === 'race';
@@ -1158,15 +1159,17 @@ function renderLb() {
   renderCourses($('#lbCourses'), tid);
   $$('#lbMetric button').forEach(b => b.classList.toggle('on', b.dataset.m === LB.metric));
   $$('#lbBucket button').forEach(b => b.classList.toggle('on', b.dataset.b === LB.bucket));
-  $('#lbHint').textContent = LB.metric === 'race' && lbReady() ? 'タップでそのゴーストと対戦（いま選んでいる車で）' : '';
+  $$('#lbSeason button').forEach(b => b.classList.toggle('on', +b.dataset.s === LB.season));
+  const old = LB.season !== SEASON;
+  $('#lbHint').textContent = !lbReady() ? '' : [old && `シーズン${LB.season}の記録です（閲覧のみ。新しいタイムはシーズン${SEASON}に載ります）`, LB.metric === 'race' && 'タップでそのゴーストと対戦（いま選んでいる車で）'].filter(Boolean).join(' ');
   const msg = (t, x = '') => { list.innerHTML = `<li class="lb-msg">${t}</li>${x}`; };
   if (!lbReady()) return msg('オンラインランキングは準備中です');
   if (!navigator.onLine) return msg('オフラインです。電波が戻ると自動で読み込みます');   // (the SDK would wait out a 12 s timeout)
   msg('読み込み中…');
-  lbTop(tid, LB.bucket, LB.metric).then(({ rows, me }) => {
+  lbTop(tid, LB.bucket, LB.metric, LB.season).then(({ rows, me }) => {
     if (tok !== LB.tok) return;
     Object.assign(LB, { rows, me });
-    if (!rows.length) return msg('まだ記録がありません。タイムアタックで一番乗りしよう！');
+    if (!rows.length) return msg(old ? 'このシーズンの記録はありません' : 'まだ記録がありません。タイムアタックで一番乗りしよう！');
     list.innerHTML = rows.map(e => lbRow(e, e === me)).join('') + (me && !rows.includes(me) ? `<li class="lb-msg">…</li>${lbRow(me, true)}` : '');
   }, e => {
     console.warn('lb', e);
@@ -1180,7 +1183,7 @@ async function lbRace(uid) {
   if (!await ask({ title: 'ゴーストと対戦', html: `<p>${esc(e.name)} のゴースト（<b>${fmt(e.race)}</b>）とタイムアタック。</p><p>使う車：${rb(c.rarity)} ${esc(c.name)}</p>`, yes: '対戦する' })) return;
   toast('ゴーストを読み込み中…');
   try {
-    const ghost = await lbGhost(tid, LB.bucket, e);
+    const ghost = await lbGhost(tid, LB.bucket, e, LB.season);
     if (cur === 'lb' && tid === curTrack()) launch({ mode: 'ghost', trackId: tid, players: [player('p1', save.name)], ghost }, 'lb');
   } catch (err) { console.warn('lb ghost', err); sfx.error(); toast('ゴーストを読み込めませんでした', 'err'); }
 }
@@ -1203,6 +1206,7 @@ function lbSend() {
 $('#lbCourses').onclick = e => { const c = e.target.closest('[data-track]'); if (c) pickTrack(c.dataset.track); };
 $('#lbMetric').onclick = e => { const b = e.target.closest('button'); if (b) { LB.metric = b.dataset.m; renderLb(); } };
 $('#lbBucket').onclick = e => { const b = e.target.closest('button'); if (b) { LB.bucket = b.dataset.b; renderLb(); } };
+$('#lbSeason').onclick = e => { const b = e.target.closest('button'); if (b) { LB.season = +b.dataset.s; renderLb(); } };
 $('#lbBucket').innerHTML = ['all', ...RARITY_ORDER].map(b => `<button data-b="${b}"${b === 'all' ? '' : ` style="color:${RARITY[b].color}"`}>${b === 'all' ? 'ALL' : b}</button>`).join('');
 $('#lbList').onclick = e => {
   if (e.target.closest('#lbRetry')) return lbNeedsReload() ? location.reload() : renderLb();
@@ -1210,7 +1214,7 @@ $('#lbList').onclick = e => {
   if (li) lbRace(li.dataset.uid);
 };
 $('#lbList').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.closest?.('li[data-uid]')?.click(); });
-$('#rLbBtn').onclick = () => { endRace(); show('lb'); };
+$('#rLbBtn').onclick = () => { LB.season = SEASON; endRace(); show('lb'); };   // 'see my rank': the season the run went to
 $('#rNameOk').onclick = () => { setName($('#rName').value); $('#rLb').hidden = true; lbSend(); };
 $('#rName').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) $('#rNameOk').click(); });   // not the Enter that confirms an IME conversion
 addEventListener('online', lbSend);

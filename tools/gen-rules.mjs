@@ -1,9 +1,10 @@
 // node tools/gen-rules.mjs — writes database.rules.json (Firebase Realtime Database rules for lb.js and sync.js) from tracks.js.
 // Re-run after adding a course, then paste the file into the console's Rules tab (SETUP-FIREBASE.md).
 // Per course: race >= length × laps / MAX_AVG, lap >= length / MAX_AVG (lb.js minTimes, generous: see MAX_AVG).
+// Leaderboard seasons: lb.js SEASON (lb2/, ghosts2/) takes writes; season 1 (lb/, ghosts/) is a read-only archive.
 import { writeFileSync } from 'node:fs';
 import { TRACKS } from '../tracks.js';
-import { minTimes, CAR_RE } from '../lb.js';
+import { minTimes, CAR_RE, SEASON, lbPath, ghostPath } from '../lb.js';
 import { CODE_RE, GROUP_RE, CODE_MS, SAVE_MAX } from '../sync.js';
 
 const own = 'auth != null && auth.uid == $uid';
@@ -26,8 +27,8 @@ const entry = m => ({
 });
 const ghost = {
   '.write': own,
-  // the ghost of this player's entry: same race time (lb/ is written in the same update)
-  '.validate': `${bucket} && newData.hasChildren(['data', 'time', 'carId', 'look', 'trackId', 'v']) && newData.child('time').val() == newData.parent().parent().parent().parent().child('lb/' + $t + '/' + $b + '/' + $uid + '/race').val()`,
+  // the ghost of this player's entry in the same season: same race time (the entry is written in the same update)
+  '.validate': `${bucket} && newData.hasChildren(['data', 'time', 'carId', 'look', 'trackId', 'v']) && newData.child('time').val() == newData.parent().parent().parent().parent().child('${lbPath(SEASON)}/' + $t + '/' + $b + '/' + $uid + '/race').val()`,
   data: V('newData.isString() && newData.val().length > 0 && newData.val().length <= 204800'),
   time: V('newData.isNumber()'),
   carId: V(car),
@@ -100,10 +101,13 @@ const cloud = {
   ...NO,
 };
 
+// an old season: public reads (indexed like the live one), no .write anywhere under it
+const archive = s => ({ [lbPath(s)]: { '.read': true, $t: { $b: { '.indexOn': ['race', 'lap'] } } }, [ghostPath(s)]: { '.read': true } });
 const rules = {
   rules: {
-    lb: { '.read': true, ...Object.fromEntries(TRACKS.map(t => [t.id, { $b: { '.indexOn': ['race', 'lap'], $uid: entry(minTimes(t.id)) } }])) },
-    ghosts: { '.read': true, $t: { $b: { $uid: ghost } } },
+    ...archive(1),   // a new season: archive the previous one here too
+    [lbPath(SEASON)]: { '.read': true, ...Object.fromEntries(TRACKS.map(t => [t.id, { $b: { '.indexOn': ['race', 'lap'], $uid: entry(minTimes(t.id)) } }])) },
+    [ghostPath(SEASON)]: { '.read': true, $t: { $b: { $uid: ghost } } },
     codes: { $code: code },
     own: { $uid: owner },
     members: { $g: { '.read': 'auth != null && data.child(auth.uid).exists()', $uid: membership } },

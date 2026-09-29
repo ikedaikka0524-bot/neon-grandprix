@@ -2,6 +2,20 @@
   "rules": {
     "lb": {
       ".read": true,
+      "$t": {
+        "$b": {
+          ".indexOn": [
+            "race",
+            "lap"
+          ]
+        }
+      }
+    },
+    "ghosts": {
+      ".read": true
+    },
+    "lb2": {
+      ".read": true,
       "circuit": {
         "$b": {
           ".indexOn": [
@@ -900,13 +914,13 @@
         }
       }
     },
-    "ghosts": {
+    "ghosts2": {
       ".read": true,
       "$t": {
         "$b": {
           "$uid": {
             ".write": "auth != null && auth.uid == $uid",
-            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['data', 'time', 'carId', 'look', 'trackId', 'v']) && newData.child('time').val() == newData.parent().parent().parent().parent().child('lb/' + $t + '/' + $b + '/' + $uid + '/race').val()",
+            ".validate": "($b == 'all' || $b == 'N' || $b == 'R' || $b == 'SR' || $b == 'UR') && newData.hasChildren(['data', 'time', 'carId', 'look', 'trackId', 'v']) && newData.child('time').val() == newData.parent().parent().parent().parent().child('lb2/' + $t + '/' + $b + '/' + $uid + '/race').val()",
             "data": {
               ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 204800"
             },
